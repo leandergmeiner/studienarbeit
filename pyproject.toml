@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "studienarbeit"
+version = "0.1.0"
+description = ""
+authors = [
+    "Leander Gmeiner <leander.gmeiner@gmail.com>",
+    "Daniel Siegert",
+    "Vinzent Engel",
+]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "<3.13,>=3.9"
+pandas = "^2.2.3"
+jupyter = "^1.1.1"
+pyarrow = "^18.0.0"
+vizdoom = "^1.2.4"
+lightning = "^2.4.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
