@@ -19,6 +19,7 @@ class PatchEmbedding(nn.Module):
     ):
         super().__init__()
 
+        # FIXME: This is a bit wack
         if depth % 2 == 0 and method == "center":
             depth += 1
             warnings.warn(
@@ -57,9 +58,7 @@ def _conv2d_to_conv3d(
 
     if method == "center":
         weight = rearrange(conv2d.weight, "o i h w -> o i () h w")
-        weight = torch.nn.functional.pad(
-            weight, (0, 0, 0, 0, depth // 2, depth // 2)
-        )
+        weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, depth // 2, depth // 2))
     elif method == "uniform":
         weight = repeat(conv2d.weight, "o i h w -> o i d h w", d=depth)
         weight /= depth

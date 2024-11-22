@@ -24,6 +24,7 @@ wheel = "^0.45.0"
 torchao = "^0.6.1"
 torch = "^2.5.1"
 einops = "^0.8.0"
+torchrl = "^0.6.0"
 
 
 [build-system]

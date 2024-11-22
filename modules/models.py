@@ -5,22 +5,17 @@ from typing import Callable, Protocol, Sequence, Mapping
 import torch
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-from torch import Tensor, einsum, nn
-
-from torchtune.modules import (
-    TransformerDecoder,
-    TransformerSelfAttentionLayer,
-    MultiHeadAttention,
-)
+from torch import Tensor, nn
+from modules.types import TrajectoryModel
 
 
-# TODO: Remove timesteps and replace them by learned relative positional encodings (?)
-# TODO: Remove embed_dim
+# The reason we don't use torchrl.modules.DecisionTransformer
+# is that it does not allow us to specifiy a custom transformer decoder backbone
 class VideoDT(nn.Module):
     def __init__(
         self,
         hidden_size: int,
-        patching: nn.Conv3d,
+        patching: nn.Module,
         pos_embedding: nn.Module,
         spatial_transformer: nn.Module,
         temporal_transformer: nn.Module,
@@ -52,13 +47,13 @@ class VideoDT(nn.Module):
 
     def forward(
         self,
-        frames: Tensor,  # b;t;c;h;w
-        actions: Tensor,
-        returns_to_go: Tensor,
+        observation: Tensor,  # b;t;c;h;w
+        action: Tensor,
+        return_to_go: Tensor,
         *,
-        mask: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        patches: Tensor = self.patching(frames)
+        attention_mask: Tensor | None = None,
+    ) -> Tensor:
+        patches: Tensor = self.patching(observation)
 
         b, t = patches.shape[:2]
 
@@ -74,12 +69,11 @@ class VideoDT(nn.Module):
         patches = self.dropout(patches)
 
         patches = rearrange(patches, "b t ... -> (b t) ...")
-        # FIXME: This outputs a tuple
         states: Tensor = self.spatial_transformer(patches)["last_hidden_state"]
         states = rearrange(states[:, 0], "(b t) ... -> b t ...", b=b, t=t)
 
-        embedded_actions: Tensor = self.embed_action(actions)
-        embedded_returns: Tensor = self.embed_return(returns_to_go)
+        embedded_actions: Tensor = self.embed_action(action)
+        embedded_returns: Tensor = self.embed_return(return_to_go)
 
         embeddings = [embedded_returns, states, embedded_actions]
 
@@ -91,60 +85,53 @@ class VideoDT(nn.Module):
         x = self.pos_embedding(x)
         x = rearrange(x, "b n h d -> b n (h d)")
         #  TODO: pos embeddings
-        x = self.temp_norm(x)
         # We don't need a temporal_token
         # x = torch.cat([cls_temporal_token, x], dim=1)
 
         # TODO: Is this correct?
         stacked_attention_mask = (
             repeat(
-                mask,
+                attention_mask,
                 "s1 s2 -> b (s1 e1) (s2 e2)",
                 b=b,
                 e1=len(embeddings),
                 e2=len(embeddings),
             )
-            if mask is not None
+            if attention_mask is not None
             else None
         )
 
-        print(stacked_attention_mask.shape)
+        x = self.temp_norm(x)
+        x = self.temporal_transformer(
+            inputs_embeds=x, attention_mask=stacked_attention_mask
+        )
 
-        x = self.temporal_transformer(x, mask=stacked_attention_mask)
+        if isinstance(x, Mapping):
+            x = x["last_hidden_state"]
+
         x = rearrange(x, "b (n e) d -> b e n d", e=len(embeddings))
 
-        return {"last_hidden_state": x}
+        return x[:, 1]
 
 
-def get_simple_temporal_decoder(
-    hidden_size: int, num_heads: int, max_seq_len: int, num_layers: int
-):
-    head_dim = hidden_size // num_heads
+class DTActor(nn.Module):
+    def __init__(self, model: TrajectoryModel, hidden_dim: int, action_dim: int):
+        super().__init__()
+        self.model = model
+        self.action_layer = nn.Linear(hidden_dim, action_dim)
 
-    decoder = TransformerDecoder(
-        tok_embeddings=torch.nn.Identity(),
-        layers=TransformerSelfAttentionLayer(
-            MultiHeadAttention(
-                embed_dim=hidden_size,
-                num_heads=num_heads,
-                num_kv_heads=num_heads,
-                head_dim=head_dim,
-                q_proj=torch.nn.LazyLinear(hidden_size, bias=False),
-                k_proj=torch.nn.LazyLinear(hidden_size, bias=False),
-                v_proj=torch.nn.LazyLinear(hidden_size, bias=False),
-                output_proj=torch.nn.LazyLinear(hidden_size, bias=False),
-            ),
-            mlp=torch.nn.LazyLinear(hidden_size),
-            sa_norm=torch.nn.LayerNorm(hidden_size),
-            mlp_norm=torch.nn.LayerNorm(hidden_size),
-            sa_scale=lambda attn: attn * (hidden_size**-0.5),
-        ),
-        num_layers=num_layers,
-        max_seq_len=3 * max_seq_len,
-        num_heads=num_heads,
-        head_dim=head_dim,
-        norm=torch.nn.LayerNorm(hidden_size),
-        output=torch.nn.LazyLinear(hidden_size),
-    )
+        self.action_layer.apply(lambda x: nn.init.orthogonal_(x.weight.data))
 
-    return decoder
+    def forward(
+        self,
+        observation: Tensor,
+        action: Tensor,
+        return_to_go: Tensor,
+        *,
+        attention_mask: Tensor | None = None,
+    ) -> Tensor:
+        hidden_state = self.model(
+            observation, action, return_to_go, attention_mask=attention_mask
+        )
+        out = self.action_layer(hidden_state)
+        return out
