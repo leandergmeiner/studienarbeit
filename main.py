@@ -3,7 +3,7 @@ from torchtune.modules import RotaryPositionalEmbeddings
 from torchrl.modules import (
     ProbabilisticActor,
     DecisionTransformerInferenceWrapper,
-    TanhDelta,
+    TanhDelta, Delta
 )
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule

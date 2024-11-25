@@ -1,11 +1,8 @@
-import copy
-from functools import partial
-from typing import Callable, Protocol, Sequence, Mapping
+from typing import Mapping
 
 import torch
 from einops import rearrange, repeat
-from einops.layers.torch import Rearrange
-from torch import Tensor, nn
+from torch import Tensor, nn, vmap
 from modules.types import TrajectoryModel
 
 
@@ -77,14 +74,12 @@ class VideoDT(nn.Module):
 
         embeddings = [embedded_returns, states, embedded_actions]
 
-        # TODO: Is this application of the pos embeddings correct? [pos(e) for e in embeddings]
-        # I think not!
         x: Tensor = rearrange(
-            embeddings, "e b n (h d) -> b (n e) h d", h=self.num_temporal_heads
+            embeddings, "e b n (h d) -> e b n h d", h=self.num_temporal_heads
         )
-        x = self.pos_embedding(x)
-        x = rearrange(x, "b n h d -> b n (h d)")
-        #  TODO: pos embeddings
+        x = vmap(self.pos_embedding)(x)
+        x = rearrange(x, "e b n h d -> b (n e) (h d)")
+
         # We don't need a temporal_token
         # x = torch.cat([cls_temporal_token, x], dim=1)
 
