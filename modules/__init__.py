@@ -4,4 +4,5 @@
 
 from .types import TrajectoryModel
 from .conv import PatchEmbedding
-from .models import VideoDT, DTActor
+from .models import VideoDT
+from .actor import DTActor, OnlineActor

@@ -3,11 +3,12 @@ from torchtune.modules import RotaryPositionalEmbeddings
 from torchrl.modules import (
     ProbabilisticActor,
     DecisionTransformerInferenceWrapper,
-    TanhDelta, Delta
 )
+
+from tensordict.nn.probabilistic import InteractionType
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
-
+from torch.distributions import RelaxedOneHotCategorical
 from transformers import DeiTModel, GPT2Config, GPT2Model
 from modules import PatchEmbedding, VideoDT, DTActor
 
@@ -33,7 +34,7 @@ temporal_transformer = GPT2Model(
         n_embd=hidden_size,
         n_positions=max_seq_len,
         n_inner=max_seq_len,
-        n_layer=12,
+        n_layer=6,
         n_head=num_temporal_heads,
     )
 )
@@ -59,23 +60,27 @@ model = DTActor(
 
 actor = ProbabilisticActor(
     TensorDictModule(
-        model, in_keys=["observation", "action", "return_to_go"], out_keys=["param"]
+        model, in_keys=["observation", "action", "return_to_go"], out_keys=["probs"]
     ),
-    in_keys=["param"],
+    in_keys=["probs"],
     out_keys=["action"],
-    distribution_class=TanhDelta,  # TODO: What is TanhDelta?
-    distribution_kwargs={"low": -1.0, "high": 1.0},
+    distribution_class=RelaxedOneHotCategorical,
+    distribution_kwargs={"temperature": 2.0},  # TODO: Adjust this
+    default_interaction_type=InteractionType.RANDOM,
 )
 
 # Test
-observation = torch.randn((1, 20, 3, 224, 224))
-action = torch.randn((1, 4, 12))
-return_to_go = torch.randn((1, 4, 1))
+torch.manual_seed(0)
+batch_size = 1
+observation = torch.randn((batch_size, 20, 3, 224, 224))
+action = torch.randn((batch_size, 4, 12))
+return_to_go = torch.randn((batch_size, 4, 1))
 
 inputs = TensorDict(
-    {"observation": observation, "action": action, "return_to_go": return_to_go}
+    {"observation": observation, "action": action, "return_to_go": return_to_go},
+    batch_size,
 )
 
 outputs = actor(inputs)
 # x = next_action(x)
-print(outputs)
+print(outputs["action"])

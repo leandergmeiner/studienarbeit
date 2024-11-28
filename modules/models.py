@@ -3,7 +3,6 @@ from typing import Mapping
 import torch
 from einops import rearrange, repeat
 from torch import Tensor, nn, vmap
-from modules.types import TrajectoryModel
 
 
 # The reason we don't use torchrl.modules.DecisionTransformer
@@ -33,7 +32,7 @@ class VideoDT(nn.Module):
         self.embed_return = nn.LazyLinear(self.hidden_size)
 
         self.space_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
-        # self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
+        self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
 
         self.dropout = dropout
 
@@ -55,7 +54,7 @@ class VideoDT(nn.Module):
         b, t = patches.shape[:2]
 
         cls_space_token = repeat(self.space_token, "() n d -> b t n d", b=b, t=t)
-        # cls_temporal_token = repeat(self.temporal_token, "() n d -> b n d", b=b)
+        cls_temporal_token = repeat(self.temporal_token, "() n d -> b n d", b=b)
 
         patches = torch.cat([cls_space_token, patches], dim=2)
         patches = rearrange(
@@ -81,7 +80,7 @@ class VideoDT(nn.Module):
         x = rearrange(x, "e b n h d -> b (n e) (h d)")
 
         # We don't need a temporal_token
-        # x = torch.cat([cls_temporal_token, x], dim=1)
+        x = torch.cat([cls_temporal_token, x], dim=1)
 
         # TODO: Is this correct?
         stacked_attention_mask = (
@@ -107,26 +106,3 @@ class VideoDT(nn.Module):
         x = rearrange(x, "b (n e) d -> b e n d", e=len(embeddings))
 
         return x[:, 1]
-
-
-class DTActor(nn.Module):
-    def __init__(self, model: TrajectoryModel, hidden_dim: int, action_dim: int):
-        super().__init__()
-        self.model = model
-        self.action_layer = nn.Linear(hidden_dim, action_dim)
-
-        self.action_layer.apply(lambda x: nn.init.orthogonal_(x.weight.data))
-
-    def forward(
-        self,
-        observation: Tensor,
-        action: Tensor,
-        return_to_go: Tensor,
-        *,
-        attention_mask: Tensor | None = None,
-    ) -> Tensor:
-        hidden_state = self.model(
-            observation, action, return_to_go, attention_mask=attention_mask
-        )
-        out = self.action_layer(hidden_state)
-        return out
