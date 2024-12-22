@@ -17,13 +17,13 @@ def create_vizdoom_env():
             self.observation_space = gymnasium.spaces.Box(
                 low=0, 
                 high=255, 
-                shape=(self.game.get_screen_height(), self.game.get_screen_width(),1), 
+                shape=(self.game.get_screen_height(), self.game.get_screen_width(),3), 
                 dtype=np.uint8
             )
             self.frame_skip = 4
             self.kill_State = []        
             self.game_sucess = +200
-            self.max_ammo = 52
+            self.max_ammo = 26 # lvl1.52, lvl2.26, lvl3.26
             self.writer = SummaryWriter("./custom_metrics")
             self.episode_count = 0
             
@@ -33,7 +33,7 @@ def create_vizdoom_env():
             self.kill_State = []
             state = self.game.get_state()
             return (
-                np.expand_dims(state.screen_buffer, axis=-1)  if state else np.zeros(self.observation_space.shape, dtype=np.uint8), 
+                self.game.get_state().screen_buffer if state else np.zeros(self.observation_space.shape, dtype=np.uint8), 
                 {}
             )
         
@@ -42,20 +42,17 @@ def create_vizdoom_env():
             total_reward =0
             done = self.game.is_episode_finished()
             action = action.astype(int).tolist()
-            reward = self.game.make_action(action)/100
-            #Penalty for shooting
-            if action[2]: reward -= 1
+            reward = self.game.make_action(action)
+            ammo = self.game.get_game_variable(vzd.SELECTED_WEAPON_AMMO)
+            if action[2]==1: 
+                reward -= 1.5
 
-            # Lass icj jetzt auch erstmal außen vor, da nicht primary goal.
-            # if self.game.get_game_variable(vzd.SELECTED_WEAPON_AMMO)==0: done =True
-            
             health = self.game.get_game_variable(vzd.GameVariable.HEALTH)
             kill_count = self.game.get_game_variable(vzd.GameVariable.KILLCOUNT)
             if done:
-                ammo = self.game.get_game_variable(vzd.GameVariable.SELECTED_WEAPON_AMMO)
+                ammo = self.game.get_game_variable(vzd.SELECTED_WEAPON_AMMO)
                 self.game.new_episode()
                 self.kill_State=[]
-  
                 if health <=0: 
                     outcome = "Death"
                 else: 
@@ -65,12 +62,10 @@ def create_vizdoom_env():
                 self.writer.add_scalar("Game/Outcome", {"Death": 0, "Win": 1}[outcome], self.episode_count)
                 self.writer.add_scalar("Game/AmmoRemaining", ammo, self.episode_count)
 
-
                 self.episode_count +=1
-                # if kill_count!=0 and kill_count/self.max_ammo - self.game.get_game_variable(vzd.SELECTED_WEAPON_AMMO)>=0.5 : total_reward+=0.1
                 return (
                     np.zeros(self.observation_space.shape, dtype=np.uint8), 
-                    total_reward,  
+                    reward/1000,  
                     done,
                     False,  
                     {},  
@@ -80,7 +75,7 @@ def create_vizdoom_env():
             if state is None:
                 return (
                     np.zeros(self.observation_space.shape, dtype=np.uint8), 
-                    total_reward,
+                    reward/1000,
                     done,
                     False,
                     {},
@@ -90,29 +85,36 @@ def create_vizdoom_env():
                 vars = state.game_variables
                 if len(self.kill_State)==0:
                     self.kill_State = [vars[0]]
-                    total_reward = reward
                 else:
                     damage = vars[1]
-                    r = self.reward_shaper(kill_count, damage)
-                    total_reward = reward +r   
-                    self.kill_State = [vars[0]]             
+                    r = self.reward_shaper(kill_count, damage, ammo)
+                    reward +=r   
+                    self.kill_State = [vars[0]] 
             except Exception as e: 
                 print(f"Error during step: {e}")
-            return np.expand_dims(self.game.get_state().screen_buffer, axis=-1) , total_reward, done,False, {}
+            return self.game.get_state().screen_buffer, reward/1000, done,False, {}
                     
-        def reward_shaper(self, kill_count , damage):
+        def reward_shaper(self, kill_count , damage, ammo):
             total_reward = 0
-            if self.kill_State[0]-kill_count>0: total_reward += 5            
-            if damage >=1: total_reward -= damage *2
+            if self.kill_State[0]-kill_count>0: total_reward += 10
+            if damage >=5: total_reward -= 10
+
+            if self.max_ammo -ammo == 0:
+                    kill_ammo_ratio =0
+            else:
+                kill_ammo_ratio = kill_count/(self.max_ammo - ammo)
+            if kill_count!=0 and kill_ammo_ratio>0.3 : 
+                total_reward+=  (2*kill_count)/(self.max_ammo - ammo) * 20
+
             # depth_buffer = game.get_state().depth_buffer
             # center_x = len(depth_buffer[0])//2
             # center_y = len(depth_buffer) //2
             # front_distance = depth_buffer[center_x][center_y]
-            # if front_distance<=5: total_reward-=0.1
+            # if front_distance<=5: total_reward-=0.05
             return total_reward
                
         def render(self):
-            return self.game.get_state().screen_buffer
+            return np.expand_dims(self.game.get_state().screen_buffer, axis=-1)
         
         def close(self):
             self.writer.close() 

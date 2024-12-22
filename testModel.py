@@ -15,7 +15,7 @@ def make_env(map_name):
     return lambda: create_vizdoom_env(map=map_name)  # Ensure your `create_vizdoom_env` handles the `map` argument
 
 if __name__ == '__main__':
-    model_path = "ppo_vizdoom_model"
+    model_path = "model_path_1"
     maps = ["scenarios/shooting/basic.cfg", "scenarios/shooting/basic.cfg", "scenarios/shooting/basic.cfg", "scenarios/shooting/basic.cfg"]
     # envs = SubprocVecEnv([make_env(map_name) for map_name in maps])
     envs = make_vec_env(lambda: create_vizdoom_env(), n_envs=1)  # Pass a callable
@@ -28,6 +28,6 @@ if __name__ == '__main__':
         # Check if any of the environments is done (any() for array-like)
         if dones.any():
             envs.reset()
-        time.sleep(0.01)
+        time.sleep(0.005)
 
     envs.close()
