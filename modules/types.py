@@ -1,5 +1,5 @@
 from typing import Protocol
-from torch import Tensor
+from torch import Tensor, LongTensor
 
 
 class TrajectoryModel(Protocol):

@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 import lightning as L
 import torch
@@ -6,6 +7,7 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 
 from modules.types import TrajectoryModel
+from dataloaders.gym import GymnasiumDataloader
 
 
 class DTActor(torch.nn.Module):
@@ -63,45 +65,48 @@ class OnlineActor(L.LightningModule):
         return self.actor(batch)
 
     def training_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch, self.train_dataloader())
+        return self.step(batch)
 
     def validation_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch, self.val_dataloader())
+        return self.step(batch)
 
     def test_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch, self.test_dataloader())
+        return self.step(batch)
 
     def predict_step(self, batch: TensorDict):
+        return self.step(batch)
+
+    def step(self, batch: TensorDict):
         out = self.forward(batch)
         y_hat: torch.Tensor = out[self.out_key]
 
-        if self.topk >= 0:
-            v, _ = y_hat.topk(self.topk)
-            y_hat[y_hat < v[:, [-1]]] = -math.inf
+        if self.target_key in batch:  # Offline
+            a = batch[self.target_key]
+            loss = self.criterion(a, y_hat)
+            return {"loss": loss, "pred": y_hat}
+        else:  # Online
+            if self.topk >= 0:
+                v, _ = y_hat.topk(self.topk)
+                y_hat[y_hat < v[:, [-1]]] = -math.inf
 
-        probs: torch.Tensor = y_hat.softmax()
+            probs = y_hat.softmax(dim=-1)
 
-        # FIXME: This only allows one single action at a time
-        if self.do_sample:
-            idx = probs.multinomial(num_samples=1)
-        else:
-            idx = probs.argmax()
+            # FIXME: This only allows one single action at a time
+            if self.do_sample:
+                idx = probs.multinomial(num_samples=1)
+            else:
+                idx = probs.argmax()
 
-        a = torch.nn.functional.one_hot(idx, num_classes=probs.shape[-1])
-        out[self.out_key][:, -1] = a  # Replace prediction by fixed value
+            a = torch.nn.functional.one_hot(idx, num_classes=probs.shape[-1])
+            out[self.out_key][:, -1] = a  # Replace prediction by fixed value
 
-        return out
-
-    def step(self, batch: TensorDict, dataloader) -> torch.Tensor:
-        """Common step"""
-        out = self.forward(batch)
-        y_hat: torch.Tensor = out[self.out_key]
-
-        a = batch[self.target_key]
-        loss = self.criterion(a, y_hat)
-
-        # For online training we advance the dataloader/env with the action
-        if callable(getattr(dataloader, "update", None)):
-            dataloader.update(y_hat)
-
-        return loss
+            return {"pred": out}
+    
+    def on_epoch_start(
+        self, dataloader: Any
+    ):
+        if not isinstance(dataloader, GymnasiumDataloader):
+            return
+        
+        dataloader.play()
+        
