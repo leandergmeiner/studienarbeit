@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "studienarbeit"
+version = "0.1.0"
+description = ""
+authors = [
+    "Leander Gmeiner <leander.gmeiner@gmail.com>",
+    "Daniel Siegert",
+    "Vinzent Engel",
+]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "<3.11,>=3.9"
+pandas = "^2.2.3"
+jupyter = "^1.1.1"
+pyarrow = "^18.0.0"
+vizdoom = "^1.2.4"
+lightning = "^2.4.0"
+torchtune = "^0.4.0"
+torchvision = "^0.20.1"
+ruff = "^0.7.4"
+transformers = "^4.46.2"
+wheel = "^0.45.0"
+torchao = "^0.6.1"
+torch = "^2.5.1"
+einops = "^0.8.0"
+torchrl = "^0.6.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
