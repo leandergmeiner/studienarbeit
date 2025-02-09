@@ -12,12 +12,17 @@ from torch.distributions import RelaxedOneHotCategorical
 from transformers import DeiTModel, GPT2Config, GPT2Model
 from modules import PatchEmbedding, VideoDT, DTActor
 
+from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
+from dataloaders.gym import OnlineGymnasiumDataloader
+
+import gymnasium as gym
+
 base_vit = DeiTModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
 
 hidden_size = 192
 
 # Aggregate information over 5 frames, this will also have a "smoothing" effect on the models actions
-depth = 5
+depth = 1
 base_conv = base_vit.embeddings.patch_embeddings.projection
 max_patches = 2048
 num_spatial_heads = 8
@@ -72,9 +77,9 @@ actor = ProbabilisticActor(
 # Test
 torch.manual_seed(0)
 batch_size = 1
-observation = torch.randn((batch_size, 20, 3, 224, 224))
-action = torch.randn((batch_size, 4, 12))
-return_to_go = torch.randn((batch_size, 4, 1))
+observation = torch.randn((batch_size, 1, 3, 224, 224))
+action = torch.randn((batch_size, 1, 12)) # FIXME: Can't pass in action size 0. This is necessary to start, though
+return_to_go = torch.randn((batch_size, 1, 1))
 
 inputs = TensorDict(
     {"observation": observation, "action": action, "return_to_go": return_to_go},
@@ -84,3 +89,6 @@ inputs = TensorDict(
 outputs = actor(inputs)
 # x = next_action(x)
 print(outputs["action"])
+
+# envs = VectorAggregateWrapper(gym.make_vec("doom"), initial_factory=Trajectory, aggregate=Trajectory.aggregate)
+# dataloader = OnlineGymnasiumDataloader(envs, replay_buffer=TODO, return_to_go=TODO, max_ep_len=25_000, max_new_rounds=envs.num_envs)

@@ -7,7 +7,7 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 
 from modules.types import TrajectoryModel
-from dataloaders.gym import GymnasiumDataloader
+from dataloaders.gym import OnlineGymnasiumDataloader
 
 
 class DTActor(torch.nn.Module):
@@ -105,8 +105,12 @@ class OnlineActor(L.LightningModule):
     def on_epoch_start(
         self, dataloader: Any
     ):
-        if not isinstance(dataloader, GymnasiumDataloader):
+        if not hasattr(dataloader, "update"):
             return
         
-        dataloader.play()
+        dataloader.update(self)
+
+    @property
+    def device(self):
+        return self.actor.device
         

@@ -1,6 +1,5 @@
-import copy
 from dataclasses import dataclass, field
-from typing import Any, Callable, Final
+from typing import Any, Callable, Final, TypeVar, Generic
 
 import gymnasium as gym
 import numpy as np
@@ -8,9 +7,8 @@ import torch
 import torchrl.data
 from tensordict import TensorDict
 
-
 @dataclass
-class Episode:
+class Trajectory:
     observations: list[torch.Tensor] = field(default_factory=list)
     actions: list[torch.Tensor] = field(default_factory=list)
     returns_to_go: list[float] = field(default_factory=list)
@@ -21,8 +19,8 @@ class Episode:
     max_return_to_go: float = 0.0
     has_stopped: bool = False
 
-    def step(self, action, observation: Any, reward: float, has_stopped: bool):
-        self.has_stopped = has_stopped
+    def aggregate(self, action: Any, observation: Any, reward: float, terminated: bool, truncated: bool, info: dict):
+        self.has_stopped = terminated or truncated
         self.observations.append(observation)
         self.actions.append(action)
         self.rewards.append(reward)
@@ -49,14 +47,14 @@ class Episode:
         return td
 
 
-class EpisodeWrapper(gym.vector.VectorWrapper):
+class TrajectoryWrapper(gym.vector.VectorWrapper):
     def __init__(
         self,
         envs: gym.vector.VectorEnv,
         replay_buffer: torchrl.data.TensorDictReplayBuffer,
         max_return_to_go: float | None = None,
     ):
-        assert isinstance(replay_buffer[0], Episode)
+        assert isinstance(replay_buffer[0], Trajectory)
 
         super().__init__(envs)
 
@@ -68,7 +66,7 @@ class EpisodeWrapper(gym.vector.VectorWrapper):
         )
         self.max_return_to_go = max_return_to_go
 
-        self.episodes: list[Episode] = []
+        self.episodes: list[Trajectory] = []
         self.num_finished_episodes = 0
         self._reset_episodes()
 
@@ -105,38 +103,38 @@ class EpisodeWrapper(gym.vector.VectorWrapper):
         if indices is None:
             self.num_finished_episodes = 0
             self.episodes = self.env.num_envs * [
-                Episode(max_return_to_go=self.max_return_to_go)
+                Trajectory(max_return_to_go=self.max_return_to_go)
             ]
         else:
             self.num_finished_episodes -= len(indices)
             for idx in indices:
-                self.episodes[idx] = Episode(max_return_to_go=self.max_return_to_go)
+                self.episodes[idx] = Trajectory(max_return_to_go=self.max_return_to_go)
 
-
-class AggregateWrapper(gym.Wrapper):
+T = TypeVar("T")
+class AggregateWrapper(gym.Wrapper, Generic[T]):
     def __init__(
         self,
         env,
-        initial_factory: Callable,
-        aggregate: Callable,
+        initial_factory: Callable[[np.ndarray | None], T],
+        aggregate: Callable[..., T],
     ):
         super().__init__(env)
 
         self.initial_factory = initial_factory
-        self.current = self.initial_factory()
-        self.aggregations = []
+        self.current = self.initial_factory(None)
+        self.aggregations: list[T] = []
 
         self.aggregate_func = aggregate
 
     def step(self, action):
         state = self.env.step(action)
-        self.aggregate(*state)
+        self.aggregate(action, *state)
 
         return state
 
-    def aggregate(self, observations, rewards, terminated, truncated, info):
+    def aggregate(self, action, observations, rewards, terminated, truncated, info):
         self.current = self.aggregate_func(
-            self.current, observations, rewards, terminated, truncated, info
+            self.current, action, observations, rewards, terminated, truncated, info
         )
 
         if terminated or truncated:
@@ -144,14 +142,15 @@ class AggregateWrapper(gym.Wrapper):
             self.current = self.initial_factory()
 
     def reset(self, *, seed=None, options=None):
+        state, info = super().reset(seed=seed, options=options)
         self.aggregations.append(self.current)
-        self.current = self.initial_factory()
-        return super().reset(seed=seed, options=options)
+        self.current = self.initial_factory(state)
 
+        return state, info
 
-class VectorAggregateWrapper(gym.vector.VectorWrapper):
+class VectorAggregateWrapper(gym.vector.VectorWrapper, Generic[T]):
     def __init__(
-        self, env: gym.vector.VectorEnv, wrapper: type[AggregateWrapper], **kwargs
+        self, env: gym.vector.VectorEnv, *, wrapper: type[AggregateWrapper[T]] = AggregateWrapper[T], **kwargs
     ):
         super().__init__(env, **kwargs)
 
@@ -160,8 +159,8 @@ class VectorAggregateWrapper(gym.vector.VectorWrapper):
     def step(self, actions):
         states = self.env.step(actions)
 
-        for wrapper, *state in zip(self.wrappers, *states):
-            wrapper.aggregate(*state)
+        for wrapper, action, *state in zip(self.wrappers, actions, *states):
+            wrapper.aggregate(action, *state)
 
         return states
 
@@ -172,10 +171,10 @@ class VectorAggregateWrapper(gym.vector.VectorWrapper):
         return super().reset(seed=seed, options=options)
 
     @property
-    def aggregations(self):
+    def aggregations(self) -> list[T]:
         return [agg for wrapper in self.wrappers for agg in wrapper.aggregations]
 
     @property
-    def current(self) -> list:
+    def current(self) -> list[T]:
         return [wrapper.current for wrapper in self.wrappers]
         

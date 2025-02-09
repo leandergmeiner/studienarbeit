@@ -54,7 +54,7 @@ class VideoDT(nn.Module):
         b, t = patches.shape[:2]
 
         cls_space_token = repeat(self.space_token, "() n d -> b t n d", b=b, t=t)
-        cls_temporal_token = repeat(self.temporal_token, "() n d -> b n d", b=b)
+        # cls_temporal_token = repeat(self.temporal_token, "() n d -> b n d", b=b)
 
         patches = torch.cat([cls_space_token, patches], dim=2)
         patches = rearrange(
@@ -65,7 +65,11 @@ class VideoDT(nn.Module):
         patches = self.dropout(patches)
 
         patches = rearrange(patches, "b t ... -> (b t) ...")
-        states: Tensor = self.spatial_transformer(patches)["last_hidden_state"]
+        states: Tensor = self.spatial_transformer(patches)
+        
+        if isinstance(states, Mapping):
+            states = states["last_hidden_state"]
+        
         states = rearrange(states[:, 0], "(b t) ... -> b t ...", b=b, t=t)
 
         embedded_actions: Tensor = self.embed_action(action)
@@ -79,8 +83,9 @@ class VideoDT(nn.Module):
         x = vmap(self.pos_embedding)(x)
         x = rearrange(x, "e b n h d -> b (n e) (h d)")
 
-        # We don't need a temporal_token
-        x = torch.cat([cls_temporal_token, x], dim=1)
+        # TODO We don't need a temporal_token
+        # The temporal model should keep add one itself
+        # x = torch.cat([cls_temporal_token, x], dim=1)
 
         # TODO: Is this correct?
         stacked_attention_mask = (
@@ -94,6 +99,8 @@ class VideoDT(nn.Module):
             if attention_mask is not None
             else None
         )
+        
+        print(x.shape)
 
         x = self.temp_norm(x)
         x = self.temporal_transformer(
