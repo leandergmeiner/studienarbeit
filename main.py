@@ -1,21 +1,28 @@
+# %%
 import torch
 from torchtune.modules import RotaryPositionalEmbeddings
 from torchrl.modules import (
     ProbabilisticActor,
     DecisionTransformerInferenceWrapper,
 )
+import itertools
+import operator
+
+from lightning import LightningDataModule
 
 from tensordict.nn.probabilistic import InteractionType
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
-from torch.distributions import RelaxedOneHotCategorical
+from torch.distributions import Bernoulli
 from transformers import DeiTModel, GPT2Config, GPT2Model
-from modules import PatchEmbedding, VideoDT, DTActor
+from modules import PatchEmbedding, VideoDT, DTActor, LightningActor
+from data.doom import get_offline_datasets, get_online_datasets
 
-from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
-from dataloaders.gym import OnlineGymnasiumDataloader
+# from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
 
-import gymnasium as gym
+# %%
+# FIXME: We can not save even 10,000 steps with pixel information, therefore we generate the
+# data on the fly. 10,000 steps would take more than 4.3 GB of memory.
 
 base_vit = DeiTModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
 
@@ -44,7 +51,7 @@ temporal_transformer = GPT2Model(
     )
 )
 
-model = DTActor(
+transformer = DTActor(
     VideoDT(
         hidden_size=hidden_size,
         patching=PatchEmbedding(base_conv, depth),
@@ -65,20 +72,45 @@ model = DTActor(
 
 actor = ProbabilisticActor(
     TensorDictModule(
-        model, in_keys=["observation", "action", "return_to_go"], out_keys=["probs"]
+        transformer,
+        in_keys=["observation", "action", "return_to_go"],
+        out_keys=["logits"],
     ),
-    in_keys=["probs"],
+    in_keys=["logits"],
     out_keys=["action"],
-    distribution_class=RelaxedOneHotCategorical,
-    distribution_kwargs={"temperature": 2.0},  # TODO: Adjust this
+    distribution_class=Bernoulli,
     default_interaction_type=InteractionType.RANDOM,
 )
 
+model = actor
+
+model = LightningActor(
+    actor,
+    criterion=torch.nn.CrossEntropyLoss(),
+    actor_out_key="logits",
+)
+
+# data_module = LightningDataModule.from_datasets(
+#     itertools.chain(
+#         get_offline_datasets(),
+#         get_online_datasets(DecisionTransformerInferenceWrapper(model, inference_context=max_seq_len)),
+#     )
+# )
+
+# TODO: Use FuseLAMB (Large Batch Optimization for Deep Learning: Training BERT in 76 minutes)
+# TODO: Use OnlineDTLoss
+# TODO: Tublets, how to report the final reward? Sum should work well.
+
+# TODO: Use Lightning StreamingDataset
+
+# %%
 # Test
 torch.manual_seed(0)
 batch_size = 1
 observation = torch.randn((batch_size, 1, 3, 224, 224))
-action = torch.randn((batch_size, 1, 12)) # FIXME: Can't pass in action size 0. This is necessary to start, though
+action = torch.randn(
+    (batch_size, 0, 12)
+)  # FIXME: Can't pass in action size 0. This is necessary to start, though
 return_to_go = torch.randn((batch_size, 1, 1))
 
 inputs = TensorDict(
@@ -92,3 +124,5 @@ print(outputs["action"])
 
 # envs = VectorAggregateWrapper(gym.make_vec("doom"), initial_factory=Trajectory, aggregate=Trajectory.aggregate)
 # dataloader = OnlineGymnasiumDataloader(envs, replay_buffer=TODO, return_to_go=TODO, max_ep_len=25_000, max_new_rounds=envs.num_envs)
+
+# %%

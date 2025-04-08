@@ -65,17 +65,17 @@ class VideoDT(nn.Module):
         patches = self.dropout(patches)
 
         patches = rearrange(patches, "b t ... -> (b t) ...")
-        states: Tensor = self.spatial_transformer(patches)
-        
-        if isinstance(states, Mapping):
-            states = states["last_hidden_state"]
-        
-        states = rearrange(states[:, 0], "(b t) ... -> b t ...", b=b, t=t)
+        embedded_states: Tensor = self.spatial_transformer(patches)
+
+        if isinstance(embedded_states, Mapping):
+            embedded_states = embedded_states["last_hidden_state"]
+
+        embedded_states = rearrange(embedded_states[:, 0], "(b t) ... -> b t ...", b=b, t=t)
 
         embedded_actions: Tensor = self.embed_action(action)
         embedded_returns: Tensor = self.embed_return(return_to_go)
 
-        embeddings = [embedded_returns, states, embedded_actions]
+        embeddings = [embedded_returns, embedded_states, embedded_actions]
 
         x: Tensor = rearrange(
             embeddings, "e b n (h d) -> e b n h d", h=self.num_temporal_heads
@@ -99,7 +99,7 @@ class VideoDT(nn.Module):
             if attention_mask is not None
             else None
         )
-        
+
         print(x.shape)
 
         x = self.temp_norm(x)
@@ -112,4 +112,6 @@ class VideoDT(nn.Module):
 
         x = rearrange(x, "b (n e) d -> b e n d", e=len(embeddings))
 
+        # TODO: is it x[:, 1] or x[:, 2] ??
+        # Take each aggregated state (idx 1) to later predict the next action
         return x[:, 1]

@@ -1,13 +1,9 @@
-import math
-from typing import Any
-
 import lightning as L
 import torch
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 
 from modules.types import TrajectoryModel
-from dataloaders.gym import OnlineGymnasiumDataloader
 
 
 class DTActor(torch.nn.Module):
@@ -30,20 +26,17 @@ class DTActor(torch.nn.Module):
         hidden_state = self.model(
             observation, action, return_to_go, attention_mask=attention_mask
         )
-        out = self.action_layer(hidden_state).softmax(dim=-1)
-        return out
+        return self.action_layer(hidden_state)
 
-
-class OnlineActor(L.LightningModule):
+class LightningActor(L.LightningModule):
     def __init__(
         self,
         actor: TensorDictModule,
         criterion: torch.nn.Module,
-        metrics: dict[str, torch.nn.Module] | None,
-        out_key: str | None = None,
+        metrics: dict[str, torch.nn.Module] | None = None,
+        actor_out_key: str | None = None,
+        out_key: str | None = "action",
         target_key: str = "target",
-        topk: int = -1,
-        do_sample: bool = False,
     ):
         super().__init__()
 
@@ -53,64 +46,28 @@ class OnlineActor(L.LightningModule):
         self.metrics = metrics or {}
 
         assert len(self.actor.out_keys) > 0
-        self.out_key = out_key or self.actor.out_keys[-1]
+        self.actor_out_key = actor_out_key or self.actor.out_keys[-1]
+        self.out_key = out_key
         self.target_key = target_key
 
         self.criterion = criterion
 
-        self.topk = topk
-        self.do_sample = do_sample
-
     def forward(self, batch: TensorDict) -> TensorDict:
-        return self.actor(batch)
+        out = self.actor(batch)
+        predicted_actions: torch.Tensor = out[self.actor_out_key]
 
-    def training_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch)
+        if self.target_key in batch:  # TODO: How to go about the loss?
+            target_actions = batch[self.target_key]
+            # Key must be "loss"
+            out["loss"] = self.criterion(predicted_actions, target_actions)
 
-    def validation_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch)
+        out[self.out_key] = predicted_actions
 
-    def test_step(self, batch: TensorDict, **kwargs):
-        return self.step(batch)
+        return out
 
-    def predict_step(self, batch: TensorDict):
-        return self.step(batch)
-
-    def step(self, batch: TensorDict):
-        out = self.forward(batch)
-        y_hat: torch.Tensor = out[self.out_key]
-
-        if self.target_key in batch:  # Offline
-            a = batch[self.target_key]
-            loss = self.criterion(a, y_hat)
-            return {"loss": loss, "pred": y_hat}
-        else:  # Online
-            if self.topk >= 0:
-                v, _ = y_hat.topk(self.topk)
-                y_hat[y_hat < v[:, [-1]]] = -math.inf
-
-            probs = y_hat.softmax(dim=-1)
-
-            # FIXME: This only allows one single action at a time
-            if self.do_sample:
-                idx = probs.multinomial(num_samples=1)
-            else:
-                idx = probs.argmax()
-
-            a = torch.nn.functional.one_hot(idx, num_classes=probs.shape[-1])
-            out[self.out_key][:, -1] = a  # Replace prediction by fixed value
-
-            return {"pred": out}
-    
-    def on_epoch_start(
-        self, dataloader: Any
-    ):
-        if not hasattr(dataloader, "update"):
-            return
-        
-        dataloader.update(self)
+    def training_step(self, batch: TensorDict):
+        return self.forward(batch)
 
     @property
     def device(self):
         return self.actor.device
-        

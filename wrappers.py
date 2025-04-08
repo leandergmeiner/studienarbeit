@@ -7,6 +7,7 @@ import torch
 import torchrl.data
 from tensordict import TensorDict
 
+
 @dataclass
 class Trajectory:
     observations: list[torch.Tensor] = field(default_factory=list)
@@ -19,7 +20,15 @@ class Trajectory:
     max_return_to_go: float = 0.0
     has_stopped: bool = False
 
-    def aggregate(self, action: Any, observation: Any, reward: float, terminated: bool, truncated: bool, info: dict):
+    def aggregate(
+        self,
+        action: Any,
+        observation: Any,
+        reward: float,
+        terminated: bool,
+        truncated: bool,
+        info: dict,
+    ):
         self.has_stopped = terminated or truncated
         self.observations.append(observation)
         self.actions.append(action)
@@ -110,7 +119,10 @@ class TrajectoryWrapper(gym.vector.VectorWrapper):
             for idx in indices:
                 self.episodes[idx] = Trajectory(max_return_to_go=self.max_return_to_go)
 
+
 T = TypeVar("T")
+
+
 class AggregateWrapper(gym.Wrapper, Generic[T]):
     def __init__(
         self,
@@ -148,9 +160,14 @@ class AggregateWrapper(gym.Wrapper, Generic[T]):
 
         return state, info
 
+
 class VectorAggregateWrapper(gym.vector.VectorWrapper, Generic[T]):
     def __init__(
-        self, env: gym.vector.VectorEnv, *, wrapper: type[AggregateWrapper[T]] = AggregateWrapper[T], **kwargs
+        self,
+        env: gym.vector.VectorEnv,
+        *,
+        wrapper: type[AggregateWrapper[T]] = AggregateWrapper[T],
+        **kwargs,
     ):
         super().__init__(env, **kwargs)
 
@@ -177,4 +194,3 @@ class VectorAggregateWrapper(gym.vector.VectorWrapper, Generic[T]):
     @property
     def current(self) -> list[T]:
         return [wrapper.current for wrapper in self.wrappers]
-        
