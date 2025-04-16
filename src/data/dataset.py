@@ -24,7 +24,11 @@ import shutil
 from torchrl.collectors.utils import split_trajectories
 from torchrl.collectors import DataCollectorBase
 
-from torchrl.envs import Reward2GoTransform
+from torchrl.envs import Reward2GoTransform, Compose, step_mdp
+
+from src.data.transforms import SaveOriginalValuesTransform
+from src.data.env import standard_env_transforms
+
 
 class DynamicGymnasiumDataset(TensorDictReplayBuffer):
     def __init__(
@@ -35,8 +39,10 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         batch_traj_len: int,
         max_traj_len: int,
         num_trajs: int,
+        policy: Callable,
         collector_maker: Callable,
-        env_maker: Callable,
+        create_env_fn: Callable,
+        num_workers: int | None = None,
         storage_maker: Callable = LazyTensorStorage,
         collector_out_key: str = "action",
         **kwargs,
@@ -46,7 +52,8 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
                 "`storage` or `sampler` keyword was passed. Their values are ignored."
             )
 
-        storage = storage_maker(num_trajs * max_traj_len, ndim=1)
+        storage_size = num_trajs * max_traj_len
+        storage = storage_maker(storage_size, ndim=2 if num_workers is not None else 1)
         sampler = SliceSamplerWithoutReplacement(
             traj_key=("collector", "traj_ids"),
             truncated_key=None,
@@ -54,36 +61,45 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             strict_length=False,
         )
 
-        transform = Reward2GoTransform() # We don't need a discount factor
+        transform = kwargs.pop(
+            "transform",
+            Compose(
+                # Restore the original observations for transformer training
+                # SaveOriginalValuesTransform(in_keys=["observation"], out_key="original"),
+                Reward2GoTransform(),  # We don't need a discount factor
+            ),
+        )
 
         batch_size_transitions = batch_size * batch_traj_len
-        
+
         super().__init__(
             batch_size=batch_size_transitions,
             storage=storage,
             sampler=sampler,
-            transform=transform,
+            # transform=transform,
             **kwargs,
         )
-
+        
         self.collector: DataCollectorBase = collector_maker(
-            env_maker,
+            create_env_fn,
+            create_env_kwargs=dict(num_workers=num_workers),
+            policy=policy,
             total_frames=-1,
-            frames_per_batch=max(batch_size_transitions, max_traj_len),
+            frames_per_batch=storage_size,
             max_frames_per_traj=max_traj_len,
             reset_when_done=True,
-            replay_buffer=self,
+            # replay_buffer=self,
         )
 
         self.size = size
         self.collector_out_key = collector_out_key
 
     def __iter__(self) -> Iterator[TensorDict]:
-        collect_iterator: Iterator[None] = self.collector.iterator()
+        collect_iterator: Iterator[TensorDict] = self.collector.iterator()
 
         i = 0
         while i < self.size:
-            next(collect_iterator, None)
+            self.extend(next(collect_iterator))
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
             data_iterator = map(split_trajectories, data_iterator)
 
@@ -93,9 +109,9 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
                 # Zero the last element, as we don't have information for that in td
                 td["target"][:, -1] = 0
 
-                yield td
+                yield step_mdp(td)
 
-                i += td.shape[0]
+                i += td.shape[0] # TODO: Overhaul this calc. use nelem()
                 if not i < self.size:
                     break
 

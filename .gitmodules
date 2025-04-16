@@ -1,0 +1,3 @@
+[submodule "pretrained/arnold"]
+	path = pretrained/arnold
+	url = git@github.com:glample/Arnold.git

@@ -54,19 +54,17 @@ class LightningActor(L.LightningModule):
 
     def forward(self, batch: TensorDict) -> TensorDict:
         out = self.actor(batch)
-        predicted_actions: torch.Tensor = out[self.actor_out_key]
-
-        if self.target_key in batch:  # TODO: How to go about the loss?
-            target_actions = batch[self.target_key]
-            # Key must be "loss"
-            out["loss"] = self.criterion(predicted_actions, target_actions)
-
-        out[self.out_key] = predicted_actions
+        out[self.out_key] = out[self.actor_out_key]
 
         return out
 
     def training_step(self, batch: TensorDict):
-        return self.forward(batch)
+        out = self.forward(batch)
+        
+        # TODO: How to go about the loss?
+        target_actions = batch[self.target_key]
+        # Key must be "loss"
+        out["loss"] = self.criterion(out[self.actor_out_key], target_actions)
 
     @property
     def device(self):
