@@ -1,31 +1,20 @@
 # %%
-from typing import Literal, Any
+from typing import Literal
 
 from logging import getLogger
 from pathlib import Path
 
 import torch
-from tensordict.nn import TensorDictModule, dispatch
 from tensordict import TensorDict
 
 from pretrained.arnold.src.args import finalize_args
 from pretrained.arnold.src.model import get_model_class, DQNRecurrent, DQNFeedforward
-from pretrained.arnold.src.doom.utils import get_n_feature_maps
-from pretrained.arnold.src.doom.actions import ActionBuilder
+from pretrained.arnold.src.doom.actions import create_action_set
 from pretrained.arnold.src.model.bucketed_embedding import BucketedEmbedding
 
-from src.data.env import (
-    VizdoomWithRewardWrapper,
-    VizdoomSetGameVariables,
-    ObservationStackWrapper,
-)
+from src.data.env import DOOM_BUTTONS
 
-import cv2
 import vizdoom as vzd
-import gymnasium as gym
-import numpy as np
-import torchvision
-import torchrl
 
 from einops import rearrange
 
@@ -40,18 +29,25 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
-ArnoldModelType = Literal["dqn_ff"] | Literal["dqn_rnn"]
-ArnoldScenarioType = Literal["defend_the_center"]
+ArnoldModelType = Literal["dqn_ff", "dqn_rnn"]
+ArnoldScenarioType = Literal["defend_the_center", "deathmatch"]
+
+MODEL_PATHS: dict[ArnoldScenarioType, Path] = {
+    "defend_the_center": Path("pretrained/arnold/pretrained/defend_the_center.pth"),
+    "deathmatch": Path("pretrained/arnold/pretrained/deathmatch.pth"),
+}
 
 
 class ArnoldAgent(torch.nn.Module):
     def __init__(
         self,
         scenario: ArnoldScenarioType = "defend_the_center",
-        model_path: Path = Path("pretrained/arnold/pretrained/defend_the_center.pth"),
-        model_type: ArnoldModelType = "dqn_ff",
+        model_path: Path | None = None,
+        available_buttons: list[vzd.Button] | None = None,
     ):
         super().__init__()
+
+        model_path = model_path or MODEL_PATHS[scenario]
 
         # Network initialization and optional reloading
 
@@ -77,25 +73,55 @@ class ArnoldAgent(torch.nn.Module):
             recurrence="",
             speed="off",
             crouch="off",
-            network_type=model_type,
+            use_continuous=False,
         )
 
         if scenario == "defend_the_center":
             params.update(
                 # frame_skip=2, Not needed; Handled by TorchRL Transform
+                network_type="dqn_ff",
                 action_combinations="turn_lr+attack",
                 game_variables=[("health", 101), ("sel_ammo", 301)],
             )
+
+            # if model_type == "dqn_rnn":
+            #     params.update(
+            #         recurrence="lstm",
+            #         n_rec_layers=1,
+            #         remember=1,
+            #         batch_size=1,
+            #     )
+        elif scenario == "deathmatch":
+            raise ValueError(f"Unknown scenario: {scenario}")
         else:
             raise ValueError(f"Unknown scenario: {scenario}")
 
         finalize_args(params)
 
-        action_builder = ActionBuilder(params)
-        params = action_builder.params
-        params.action_builder = action_builder
+        # action_builder = ActionBuilder(params)
+        # params = action_builder.params
+        # params.action_builder = action_builder
 
-        network: DQNFeedforward | DQNRecurrent = get_model_class(model_type)(params)
+        available_buttons = available_buttons or DOOM_BUTTONS
+
+        self.available_buttons = list(map(lambda b: b.name, available_buttons))
+
+        self.available_actions = create_action_set(params.action_combinations, False)
+
+        self.doom_actions = []
+        for sub_actions in self.available_actions:
+            doom_action = [
+                button in sub_actions for button in self.available_buttons[:-2]
+            ]
+            doom_action.append(params.speed == "on")
+            doom_action.append(params.crouch == "on")
+            self.doom_actions.append(doom_action)
+        self.n_actions = len(self.available_actions)
+        params.n_actions = self.n_actions
+
+        network: DQNFeedforward | DQNRecurrent = get_model_class(params.network_type)(
+            params
+        )
         logger.info(f"Reloading model from {model_path}...")
         reloaded = torch.load(model_path)
         network.module.load_state_dict(reloaded)
@@ -104,7 +130,7 @@ class ArnoldAgent(torch.nn.Module):
         self.network = network
         self.screen_shape = self.network.screen_shape
 
-        self.pixels_key = ("observation",)
+        self.pixels_key = ("pixels",)
         self.game_variables_key = ("gamevariables",)
         self.action_key = ("action",)
 
@@ -114,24 +140,13 @@ class ArnoldAgent(torch.nn.Module):
 
         self.last_frames = []
 
-    # @dispatch(source=["observation", "gamevariables"], dest=["action"])
     def forward(self, tensordict: TensorDict):
-        # if not tensordict.batch_size:
-        #     tensordict = TensorDict(tensordict.unsqueeze(0), batch_size=1)
-
-        old_screen = tensordict[self.pixels_key]
-        tensordict[self.pixels_key] = rearrange(
-            tensordict[self.pixels_key], "... w h -> ... h w"
-        )
-        actions = torch.tensor(
-            [
-                self.params.action_builder.get_action(int(action_id))
-                for action_id in self.next_action(tensordict)
-            ]
-        )
+        # TODO: Solve this more elegantly using categorical actions specs in the env.
+        actions = [
+            self.doom_actions[int(action_id)]
+            for action_id in self.next_action(tensordict)
+        ]
         tensordict[self.action_key] = actions
-        tensordict[self.pixels_key] = old_screen
-
         return tensordict
 
     # Overrides of functions that don't work out-of-the-box from Arnold
@@ -163,9 +178,10 @@ class ArnoldAgent(torch.nn.Module):
         assert inputs.batch_size
 
         screen_buffer = inputs[self.pixels_key]
+        screen_buffer = rearrange(screen_buffer, "... hist c h w -> ... (hist c) h w")
 
         return self.network.module(
-            screen_buffer.view(*inputs.batch_size, -1, *self.screen_shape[1:]),
+            screen_buffer,
             inputs[self.game_variables_key].swapaxes(0, -1).long(),
         )
 
@@ -174,21 +190,5 @@ class ArnoldAgent(torch.nn.Module):
             indices.div(self.bucket_size, rounding_mode="floor")
         )
 
-
-gym.register(
-    "arnold/DefendCenter-v0",
-    entry_point="vizdoom.gymnasium_wrapper.gymnasium_env_defns:VizdoomScenarioEnv",
-    kwargs={"scenario_file": "defend_the_center.cfg"},
-    # autoreset=True,
-    additional_wrappers=(
-        gym.wrappers.AutoResetWrapper.wrapper_spec(),
-        VizdoomSetGameVariables.wrapper_spec(
-            game_variables=[
-                vzd.GameVariable.HEALTH,
-                vzd.GameVariable.SELECTED_WEAPON_AMMO,
-            ]
-        ),
-    ),
-)
 
 # %%

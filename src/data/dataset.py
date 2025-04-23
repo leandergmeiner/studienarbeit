@@ -1,33 +1,32 @@
 # %%
-from typing import Callable, Iterable, Iterator
-from dataclasses import dataclass
-from tempfile import TemporaryDirectory, mkdtemp
+import shutil
 import warnings
-
+from dataclasses import dataclass
 from pathlib import Path
-from tensordict import TensorDict, PersistentTensorDict
-import torchrl as rl
+from tempfile import TemporaryDirectory, mkdtemp
+from typing import Callable, Iterable, Iterator
 
+import torch
+import torchrl
+from tensordict import PersistentTensorDict, TensorDict
+from torchrl.collectors import DataCollectorBase
+from torchrl.collectors.utils import split_trajectories
+from torchrl.data.datasets import BaseDatasetExperienceReplay
 from torchrl.data.replay_buffers import (
+    ImmutableDatasetWriter,
+    LazyMemmapStorage,
+    LazyStackStorage,
+    LazyTensorStorage,
     ReplayBuffer,
-    TensorDictReplayBuffer,
     Sampler,
     SliceSamplerWithoutReplacement,
-    LazyStackStorage,
-    LazyMemmapStorage,
-    LazyTensorStorage,
+    TensorDictReplayBuffer,
     Writer,
-    ImmutableDatasetWriter,
 )
-from torchrl.data.datasets import BaseDatasetExperienceReplay
-import shutil
-from torchrl.collectors.utils import split_trajectories
-from torchrl.collectors import DataCollectorBase
 
-from torchrl.envs import Reward2GoTransform, Compose, step_mdp
+from einops import rearrange
 
-from src.data.transforms import SaveOriginalValuesTransform
-from src.data.env import standard_env_transforms
+# FIXME: Why is the batch size not constant when iterating???
 
 
 class DynamicGymnasiumDataset(TensorDictReplayBuffer):
@@ -53,7 +52,21 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             )
 
         storage_size = num_trajs * max_traj_len
-        storage = storage_maker(storage_size, ndim=2 if num_workers is not None else 1)
+
+        self.size = size
+        self.collector_out_key = collector_out_key
+
+        self.collector_maker = collector_maker
+        self.create_env_fn = create_env_fn
+        self.num_workers = num_workers
+        self.policy = policy
+        self.storage_size = storage_size
+        self.max_traj_len = max_traj_len
+
+        # TODO: Env Batch Size
+        storage = storage_maker(
+            self.storage_size, ndim=2 if self.num_workers is not None else 1
+        )
         sampler = SliceSamplerWithoutReplacement(
             traj_key=("collector", "traj_ids"),
             truncated_key=None,
@@ -61,13 +74,41 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             strict_length=False,
         )
 
-        transform = kwargs.pop(
-            "transform",
-            Compose(
-                # Restore the original observations for transformer training
-                # SaveOriginalValuesTransform(in_keys=["observation"], out_key="original"),
-                Reward2GoTransform(),  # We don't need a discount factor
+        transform = torchrl.envs.Compose(
+            torchrl.envs.Reward2GoTransform(),
+            torchrl.envs.RenameTransform(
+                in_keys=[],
+                out_keys=[],
+                out_keys_inv=[
+                    ("original", "pixels"),
+                    ("next", "original", "pixels"),
+                ],
+                in_keys_inv=["pixels", ("next", "pixels")],
             ),
+            torchrl.envs.ToTensorImage(
+                in_keys=["pixels", ("next", "pixels")],
+                out_keys=["pixels", ("next", "pixels")],
+                shape_tolerant=True,
+            ),
+            # TODO: Already apply this for .inv(...)
+            torchrl.envs.DTypeCastTransform(
+                dtype_in=torch.int64,
+                dtype_out=torch.bool,
+                in_keys=["action"],
+            ),
+            torchrl.envs.UnaryTransform(
+                in_keys=[self.collector_out_key],
+                out_keys=["target_action"],
+                fn=lambda td: td.roll(shifts=-1, dims=-2),
+            ),
+            # TODO: Already apply this for .inv(...)
+            torchrl.envs.ExcludeTransform("original", ("next", "original")),
+            torchrl.envs.UnaryTransform(
+                in_keys=["pixels"],
+                out_keys=["pixels"],
+                fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
+            ),
+            torchrl.envs.Resize(160, 120),
         )
 
         batch_size_transitions = batch_size * batch_traj_len
@@ -76,44 +117,40 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             batch_size=batch_size_transitions,
             storage=storage,
             sampler=sampler,
-            # transform=transform,
+            transform=transform,
             **kwargs,
         )
-        
-        self.collector: DataCollectorBase = collector_maker(
-            create_env_fn,
-            create_env_kwargs=dict(num_workers=num_workers),
-            policy=policy,
+
+    def __iter__(self) -> Iterator[TensorDict]:
+        collector: DataCollectorBase = self.collector_maker(
+            self.create_env_fn,
+            create_env_kwargs=dict(num_workers=self.num_workers),
+            policy=self.policy,
             total_frames=-1,
-            frames_per_batch=storage_size,
-            max_frames_per_traj=max_traj_len,
+            frames_per_batch=self.storage_size,
+            max_frames_per_traj=self.max_traj_len,
             reset_when_done=True,
             # replay_buffer=self,
         )
 
-        self.size = size
-        self.collector_out_key = collector_out_key
+        collect_iterator: Iterator[TensorDict] = collector.iterator()
 
-    def __iter__(self) -> Iterator[TensorDict]:
-        collect_iterator: Iterator[TensorDict] = self.collector.iterator()
-
-        i = 0
-        while i < self.size:
+        num_current_trajs = 0
+        while num_current_trajs < self.size:
             self.extend(next(collect_iterator))
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
             data_iterator = map(split_trajectories, data_iterator)
 
             for td in data_iterator:
-                # td: B x N ...
-                td["target"] = td[self.collector_out_key].roll(shifts=-1, dims=1)
-                # Zero the last element, as we don't have information for that in td
-                td["target"][:, -1] = 0
+                yield td
 
-                yield step_mdp(td)
-
-                i += td.shape[0] # TODO: Overhaul this calc. use nelem()
-                if not i < self.size:
+                num_current_trajs += td.shape[
+                    0
+                ]  # TODO: Overhaul this calc. use numel()
+                if num_current_trajs > self.size:
                     break
+
+        collector.shutdown()
 
 
 # %%
@@ -138,7 +175,7 @@ class OfflineGymnasiumDataset(BaseDatasetExperienceReplay):
         collate_fn: Callable | None = None,
         pin_memory: bool = False,
         prefetch: int | None = None,
-        transform: rl.envs.Transform | None = None,  # noqa-F821
+        transform: torchrl.envs.Transform | None = None,  # noqa-F821
     ):
         super().__init__(
             storage=LazyStackStorage(),  # We don't want to unnecessarily copy large tensors

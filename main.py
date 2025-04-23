@@ -14,9 +14,9 @@ from tensordict.nn.probabilistic import InteractionType
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from torch.distributions import Bernoulli
-from transformers import DeiTModel, GPT2Config, GPT2Model
+from transformers import AutoModel, GPT2Config, GPT2Model
 from modules import PatchEmbedding, VideoDT, DTActor, LightningActor
-from data.doom import get_offline_datasets, get_online_datasets
+# from data.doom import get_offline_datasets, get_online_datasets
 
 # from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
 
@@ -24,7 +24,7 @@ from data.doom import get_offline_datasets, get_online_datasets
 # FIXME: We can not save even 10,000 steps with pixel information, therefore we generate the
 # data on the fly. 10,000 steps would take more than 4.3 GB of memory.
 
-base_vit = DeiTModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
+base_vit = AutoModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224", force_download=True)
 
 hidden_size = 192
 
@@ -70,6 +70,7 @@ transformer = DTActor(
     action_dim=num_actions,
 )
 
+# TODO: Reward key: ("next", "reward")
 actor = ProbabilisticActor(
     TensorDictModule(
         transformer,

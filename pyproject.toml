@@ -12,7 +12,7 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "<3.11,>=3.9"
+python = "<3.11,>=3.10"
 pandas = "^2.2.3"
 jupyter = "^1.1.1"
 pyarrow = "^18.0.0"
@@ -23,7 +23,7 @@ torchvision = ">0.20.1"
 ruff = "^0.7.4"
 transformers = "^4.46.2"
 wheel = "^0.45.0"
-torchao = "^0.6.1"
+torchao = ">=0.9"
 torch = "^2.6"
 einops = "^0.8.0"
 torchrl = "^0.7.0"
@@ -33,6 +33,7 @@ gymnasium = {extras = ["other"], version = "^0.29"}
 stable-baselines3 = "^2.5.0"
 h5py = "^3.13.0"
 levdoom = "^1.0.1"
+av = "^14.3.0"
 
 
 [build-system]
