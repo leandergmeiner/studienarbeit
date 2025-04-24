@@ -29,11 +29,7 @@ if __name__ == '__main__':
         model = PPO("CnnPolicy",
             envs,
             n_steps=2048,
-            learning_rate=5e-5,
-            ent_coef=0.1,
-            clip_range=0.2,
-            gamma=0.95,
-            gae_lambda=0.95,
+            ent_coef=0.01,
             verbose=1,
             tensorboard_log="./ppo_vizdoom_tensorboard/",
             device="cuda")
