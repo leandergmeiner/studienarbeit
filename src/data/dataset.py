@@ -23,6 +23,7 @@ from torchrl.data.replay_buffers import (
     TensorDictReplayBuffer,
     Writer,
 )
+import numpy as np
 
 from einops import rearrange
 
@@ -44,6 +45,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         num_workers: int | None = None,
         storage_maker: Callable = LazyTensorStorage,
         collector_out_key: str = "action",
+        max_seen_reward: float | None = None,
         **kwargs,
     ):
         if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
@@ -75,6 +77,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         )
 
         transform = torchrl.envs.Compose(
+            # Inverse
             torchrl.envs.Reward2GoTransform(),
             torchrl.envs.RenameTransform(
                 in_keys=[],
@@ -85,6 +88,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
                 ],
                 in_keys_inv=["pixels", ("next", "pixels")],
             ),
+            # Forward
             torchrl.envs.ToTensorImage(
                 in_keys=["pixels", ("next", "pixels")],
                 out_keys=["pixels", ("next", "pixels")],
@@ -102,7 +106,9 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
                 fn=lambda td: td.roll(shifts=-1, dims=-2),
             ),
             # TODO: Already apply this for .inv(...)
-            torchrl.envs.ExcludeTransform("original", ("next", "original")),
+            torchrl.envs.ExcludeTransform(
+                "original", ("next", "original"), "labels", "labels_buffer"
+            ),
             torchrl.envs.UnaryTransform(
                 in_keys=["pixels"],
                 out_keys=["pixels"],
@@ -110,6 +116,9 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             ),
             torchrl.envs.Resize(160, 120),
         )
+        
+        if max_seen_reward is not None:
+            transform.append(torchrl.envs.TargetReturn(max_seen_reward))
 
         batch_size_transitions = batch_size * batch_traj_len
 
@@ -120,6 +129,8 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             transform=transform,
             **kwargs,
         )
+
+        self._max_seen_reward = max_seen_reward or np.finfo(np.float64).min
 
     def __iter__(self) -> Iterator[TensorDict]:
         collector: DataCollectorBase = self.collector_maker(
@@ -142,16 +153,25 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             data_iterator = map(split_trajectories, data_iterator)
 
             for td in data_iterator:
-                yield td
-
                 num_current_trajs += td.shape[
                     0
                 ]  # TODO: Overhaul this calc. use numel()
+
+                # Update max seen reward
+                self._max_seen_reward = max(
+                    self._max_seen_reward, np.float64(td["reward_to_go"].max())
+                )
+
+                yield td
+
                 if num_current_trajs > self.size:
                     break
 
         collector.shutdown()
 
+    @property
+    def max_seen_reward(self) -> np.float64:
+        return self._max_seen_reward
 
 # %%
 @dataclass

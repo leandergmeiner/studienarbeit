@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Final, TypeVar, Generic
+from typing import Any, Callable, TypeVar, Generic
 
 import gymnasium as gym
 import numpy as np

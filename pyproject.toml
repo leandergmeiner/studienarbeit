@@ -34,6 +34,7 @@ stable-baselines3 = "^2.5.0"
 h5py = "^3.13.0"
 levdoom = "^1.0.1"
 av = "^14.3.0"
+gym = "^0.26.2"
 
 
 [build-system]

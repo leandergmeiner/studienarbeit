@@ -1,11 +1,13 @@
-from typing import Callable, TypeVar, SupportsFloat
+import warnings
 from collections import defaultdict
+from typing import Callable, SupportsFloat, TypeVar
 
 import gymnasium as gym
-import vizdoom.gymnasium_wrapper  # noqa: F401
-import vizdoom as vzd
 import numpy as np
-
+import vizdoom as vzd
+import vizdoom.gymnasium_wrapper  # noqa: F401
+from gymnasium.utils import EzPickle
+from vizdoom.gymnasium_wrapper.base_gymnasium_env import VizdoomEnv
 
 ObsType = TypeVar("ObsType")
 ActType = TypeVar("ActionType")
@@ -62,6 +64,12 @@ class VizdoomSetGameVariables(gym.Wrapper):
             (self.num_game_variables,),
             dtype=self.observation_space["gamevariables"].dtype,
         )
+
+        self.unwrapped.observation_space["gamevariables"] = self.observation_space[
+            "gamevariables"
+        ]
+        self.unwrapped.num_game_variables = self.num_game_variables
+
 
 class WithRewardWrapper(gym.Wrapper):
     def __init__(
@@ -129,7 +137,90 @@ class VizdoomWithRewardWrapper(WithRewardWrapper):
             np.finfo(np.float32).min,
             np.finfo(np.float32).max,
             (self.num_game_variables,),
-            dtype=self.observation_space["gamevariables"].dtype,
+            dtype=np.float32,
         )
 
+        self.unwrapped.observation_space["gamevariables"] = self.observation_space[
+            "gamevariables"
+        ]
+        self.unwrapped.num_game_variables = self.num_game_variables
+
         self.old_state = None
+
+
+class VizdoomEnvFromGame(VizdoomEnv):
+    def __init__(
+        self,
+        game: vzd.DoomGame,
+        frame_skip: int = 1,
+        max_buttons_pressed: int = 1,
+        render_mode: vzd.ScreenFormat | None = None,
+    ):
+        EzPickle.__init__(self, game, max_buttons_pressed, frame_skip, render_mode)
+
+        self.game = game
+        self.game.close()
+
+        self.game.set_window_visible(False)
+
+        self.game.add_available_game_variable(vzd.GameVariable.HEALTH)
+
+        self.max_buttons_pressed = max_buttons_pressed
+        self.frame_skip = frame_skip
+        self.render_mode = render_mode
+
+        screen_format = self.game.get_screen_format()
+        if (
+            screen_format != vzd.ScreenFormat.RGB24
+            and screen_format != vzd.ScreenFormat.GRAY8
+        ):
+            warnings.warn(
+                f"Detected screen format {screen_format.name}. Only RGB24 and GRAY8 are supported in the Gymnasium"
+                f" wrapper. Forcing RGB24."
+            )
+            self.game.set_screen_format(vzd.ScreenFormat.RGB24)
+
+        self.state = None
+        self.clock = None
+        self.window_surface = None
+        self.isopen = True
+        self.channels = 3
+        if screen_format == vzd.ScreenFormat.GRAY8:
+            self.channels = 1
+
+        self.depth = self.game.is_depth_buffer_enabled()
+        self.labels = self.game.is_labels_buffer_enabled()
+        self.automap = self.game.is_automap_buffer_enabled()
+
+        # parse buttons defined by config file
+        self._VizdoomEnv__parse_available_buttons()
+
+        # check for valid max_buttons_pressed
+        if max_buttons_pressed > self.num_binary_buttons > 0:
+            warnings.warn(
+                f"max_buttons_pressed={max_buttons_pressed} "
+                f"> number of binary buttons defined={self.num_binary_buttons}. "
+                f"Clipping max_buttons_pressed to {self.num_binary_buttons}."
+            )
+            max_buttons_pressed = self.num_binary_buttons
+        elif max_buttons_pressed < 0:
+            raise RuntimeError(
+                f"max_buttons_pressed={max_buttons_pressed} < 0. Should be >= 0. "
+            )
+
+        # specify action space(s)
+        self.max_buttons_pressed = max_buttons_pressed
+        self.action_space = self._VizdoomEnv__get_action_space()
+
+        # specify observation space(s)
+        self.observation_space = self._VizdoomEnv__get_observation_space()
+        
+        # self.game.add_game_args("+viz_nocheat 1")
+        # self.game.add_game_args("+viz_respawn_delay 10")
+        
+        self.game.set_console_enabled(True)
+        
+        # self.game.add_game_args("+vid_forcesurface 1")
+        self.game.init()
+            
+        

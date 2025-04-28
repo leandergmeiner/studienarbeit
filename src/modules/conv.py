@@ -1,14 +1,10 @@
-import copy
 import warnings
-from functools import partial
 from typing import Literal
 
 import torch
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-from torch import Tensor, einsum, nn
-from torchtune.modules import RotaryPositionalEmbeddings
-
+from torch import Tensor, nn
 
 class PatchEmbedding(nn.Module):
     def __init__(
