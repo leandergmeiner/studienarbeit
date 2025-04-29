@@ -9,8 +9,6 @@ from src.data.wrappers import VizdoomWithRewardWrapper
 # from src.data.wrappers import VizdoomEditGameWrapper
 # from pretrained.envs import VizdoomArnoldWithLabelsBuffer
 
-# TODO: Arnold Reward Functions
-
 gym.register(
     "sa/DefendLine-v0",
     entry_point="vizdoom.gymnasium_wrapper.gymnasium_env_defns:VizdoomScenarioEnv",

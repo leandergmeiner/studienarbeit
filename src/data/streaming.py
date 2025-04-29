@@ -23,6 +23,7 @@ from torchrl.data.replay_buffers import (
     TensorDictReplayBuffer,
     Writer,
 )
+from functools import partial
 import numpy as np
 
 from einops import rearrange
@@ -30,7 +31,7 @@ from einops import rearrange
 # FIXME: Why is the batch size not constant when iterating???
 
 
-class DynamicGymnasiumDataset(TensorDictReplayBuffer):
+class GymnasiumStreamingDataset(TensorDictReplayBuffer):
     def __init__(
         self,
         *,
@@ -45,7 +46,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         num_workers: int | None = None,
         storage_maker: Callable = LazyTensorStorage,
         collector_out_key: str = "action",
-        max_seen_reward: float | None = None,
+        max_seen_rtg: float | None = None,
         **kwargs,
     ):
         if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
@@ -59,7 +60,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         self.collector_out_key = collector_out_key
 
         self.collector_maker = collector_maker
-        self.create_env_fn = create_env_fn
+        self.create_env_fn = partial(create_env_fn, max_seen_rtg=max_seen_rtg)
         self.num_workers = num_workers
         self.policy = policy
         self.storage_size = storage_size
@@ -116,9 +117,6 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             ),
             torchrl.envs.Resize(160, 120),
         )
-        
-        if max_seen_reward is not None:
-            transform.append(torchrl.envs.TargetReturn(max_seen_reward))
 
         batch_size_transitions = batch_size * batch_traj_len
 
@@ -130,7 +128,7 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             **kwargs,
         )
 
-        self._max_seen_reward = max_seen_reward or np.finfo(np.float64).min
+        self._max_seen_rtg = max_seen_rtg or np.finfo(np.float64).min
 
     def __iter__(self) -> Iterator[TensorDict]:
         collector: DataCollectorBase = self.collector_maker(
@@ -141,7 +139,6 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             frames_per_batch=self.storage_size,
             max_frames_per_traj=self.max_traj_len,
             reset_when_done=True,
-            # replay_buffer=self,
         )
 
         collect_iterator: Iterator[TensorDict] = collector.iterator()
@@ -153,13 +150,12 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
             data_iterator = map(split_trajectories, data_iterator)
 
             for td in data_iterator:
-                num_current_trajs += td.shape[
-                    0
-                ]  # TODO: Overhaul this calc. use numel()
-
+                # [:-1] -> Exclude the time dimension from the #trajectories calculation.
+                num_current_trajs += td.batch_size[:-1].numel()
+                
                 # Update max seen reward
-                self._max_seen_reward = max(
-                    self._max_seen_reward, np.float64(td["reward_to_go"].max())
+                self._max_seen_rtg = max(
+                    self._max_seen_rtg, np.float64(td["reward_to_go"].max())
                 )
 
                 yield td
@@ -170,8 +166,8 @@ class DynamicGymnasiumDataset(TensorDictReplayBuffer):
         collector.shutdown()
 
     @property
-    def max_seen_reward(self) -> np.float64:
-        return self._max_seen_reward
+    def max_seen_rtg(self) -> np.float64:
+        return self._max_seen_rtg
 
 # %%
 @dataclass

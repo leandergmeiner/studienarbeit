@@ -9,7 +9,7 @@ from torch.utils.data import IterableDataset
 from torchrl.collectors import SyncDataCollector
 
 from pretrained.models import ArnoldAgent
-from src.data.dataset import DynamicGymnasiumDataset
+from data.streaming import GymnasiumStreamingDataset
 from src.data.env import make_env
 
 BATCH_SIZE = 8
@@ -17,7 +17,7 @@ BATCH_TRAJ_LEN = 64  # TODO 192 / 3
 NUM_TRAJS = 2  # TODO
 
 
-class DoomDataModule(LightningDataModule):
+class StreamingDataModule(LightningDataModule):
     class DatasetInfo(NamedTuple):
         name: str
         policy_maker: torch.nn.Module
@@ -32,15 +32,15 @@ class DoomDataModule(LightningDataModule):
         self.num_workers: Final = num_workers
         self.num_trajs: Final = NUM_TRAJS  # TODO
 
-        self.max_seen_rewards: dict[str, np.float64] = {}
+        self.max_seen_rtgs: dict[str, np.float64] = {}
 
     def train_dataloader(self) -> Iterable[IterableDataset]:
         for dataset_info in self.get_datasets():
-            max_seen_reward=self.max_seen_rewards.get(dataset_info.name)
-            if max_seen_reward is not None:
-                max_seen_reward *= dataset_info.target_return_scaling_factor
+            max_seen_rtg=self.max_seen_rtgs.get(dataset_info.name)
+            if max_seen_rtg is not None:
+                max_seen_rtg *= dataset_info.target_return_scaling_factor
             
-            dataset = DynamicGymnasiumDataset(
+            dataset = GymnasiumStreamingDataset(
                 size=dataset_info.size,
                 batch_size=self.batch_size,
                 batch_traj_len=self.batch_traj_len,
@@ -50,18 +50,18 @@ class DoomDataModule(LightningDataModule):
                 collector_maker=SyncDataCollector,  # TODO
                 num_workers=self.num_workers,
                 create_env_fn=dataset_info.create_env_fn,
-                max_seen_reward=max_seen_reward,
+                max_seen_rtg=max_seen_rtg,
             )
 
             yield dataset
 
-            self.max_seen_rewards[dataset_info.name] = dataset.max_seen_reward
+            self.max_seen_rtgs[dataset_info.name] = dataset.max_seen_rtg
 
     @abstractmethod
     def get_datasets(self) -> list[DatasetInfo]: ...
 
 
-class DoomOfflineDataModule(DoomDataModule):
+class DoomOfflineDataModule(StreamingDataModule):
     def __init__(
         self,
         *,
@@ -76,7 +76,7 @@ class DoomOfflineDataModule(DoomDataModule):
             num_workers=num_workers,
         )
 
-        self.max_seen_rewards = max_seen_rewards or {}
+        self.max_seen_rtgs = max_seen_rewards or {}
 
     def get_datasets(self):
         return [
@@ -90,7 +90,7 @@ class DoomOfflineDataModule(DoomDataModule):
         ]
 
 
-class DoomOnlineDataModule(DoomDataModule):
+class DoomOnlineDataModule(StreamingDataModule):
     def __init__(
         self,
         policy: Callable,

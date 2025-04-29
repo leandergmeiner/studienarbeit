@@ -1,17 +1,17 @@
 # %%
 import torch
-from torchtune.modules import RotaryPositionalEmbeddings
+from tensordict import TensorDict
+from tensordict.nn import TensorDictModule
+from tensordict.nn.probabilistic import InteractionType
+from torch.distributions import Bernoulli
 from torchrl.modules import (
     ProbabilisticActor,
 )
-
-
-from tensordict.nn.probabilistic import InteractionType
-from tensordict import TensorDict
-from tensordict.nn import TensorDictModule
-from torch.distributions import Bernoulli
+from torchtune.modules import RotaryPositionalEmbeddings
 from transformers import AutoModel, GPT2Config, GPT2Model
-from modules import PatchEmbedding, VideoDT, DTActor, LightningActor
+
+from modules import DTActor, LightningActor, PatchEmbedding, VideoDT
+
 # from data.doom import get_offline_datasets, get_online_datasets
 
 # from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
@@ -20,7 +20,7 @@ from modules import PatchEmbedding, VideoDT, DTActor, LightningActor
 # FIXME: We can not save even 10,000 steps with pixel information, therefore we generate the
 # data on the fly. 10,000 steps would take more than 4.3 GB of memory.
 
-base_vit = AutoModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224", force_download=True)
+base_vit = AutoModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
 
 hidden_size = 192
 
@@ -78,8 +78,6 @@ actor = ProbabilisticActor(
     distribution_class=Bernoulli,
     default_interaction_type=InteractionType.RANDOM,
 )
-
-model = actor
 
 model = LightningActor(
     actor,

@@ -30,6 +30,7 @@ def leru(f1: SupportsFloat, f2: SupportsFloat):
     return _leru_func
 
 
+# TODO: Arnold Reward Functions
 DEFAULT_REWARD_FUNCS = {
     vzd.GameVariable.DEATHCOUNT: delta(-5000),
     vzd.GameVariable.KILLCOUNT: delta(1000),

@@ -7,6 +7,7 @@ import torchrl
 import vizdoom as vzd
 
 from src.data.common import DEFAULT_REWARD_FUNCS, DOOM_BUTTONS
+import src.data._gym_envs  # noqa: F401
 
 # %%
 # TODO: Return to go transform
@@ -89,7 +90,7 @@ def _arnold_make_transforms(frame_skip: int = 2):
         #     in_keys_inv=["action"],
         #     out_keys_inv=["action"],
         #     fn=lambda t: t,
-        #     inv_fn=lambda t: print(t) or action_projection[t],
+        #     inv_fn=lambda t: action_projection[t],
         # ),
         torchrl.envs.Resize(60, 108, in_keys=["pixels"]),
         torchrl.envs.UnsqueezeTransform(dim=-4, in_keys=["pixels"]),
@@ -121,6 +122,7 @@ def make_env(
     env,
     num_workers: int | None = None,
     transforms=[],
+    max_seen_rtg: float | None = None,
     **kwargs,
 ):
     def _make_env(env_name: str, transforms_list: list = standard_env_transforms):
@@ -130,6 +132,9 @@ def make_env(
             transforms_list = env_transforms.make_transforms()
         else:
             transforms_list = standard_env_transforms()
+            
+        if max_seen_rtg is not None:
+            transforms_list.append(torchrl.envs.TargetReturn(max_seen_rtg))
 
         # TODO: Solve this more elegantly using categorical actions specs in the env.
         env_name = torchrl.envs.GymEnv(
