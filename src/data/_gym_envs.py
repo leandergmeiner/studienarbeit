@@ -1,6 +1,7 @@
 import gymnasium as gym
 import vizdoom.gymnasium_wrapper  # noqa: F401
 
+import pretrained.envs  # noqa: F401
 from src.data.common import DEFAULT_REWARD_FUNCS
 from src.data.wrappers import VizdoomWithRewardWrapper
 
@@ -40,7 +41,6 @@ gym.register(
 )
 
 _arnold_dtc_spec = gym.spec("arnold/DefendCenter-v0")
-# _arnold_dtc_spec = gym.spec("sa/DefendCenter-v0")
 gym.register(
     "sa/ArnoldDefendCenter-v0",
     _arnold_dtc_spec.entry_point,
@@ -51,6 +51,18 @@ gym.register(
         VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFAULT_REWARD_FUNCS),
     ),
 )
+_arnold_dtc_spec = gym.spec("arnold/HealthGathering-v0")
+gym.register(
+    "sa/ArnoldHealthGathering-v0",
+    _arnold_dtc_spec.entry_point,
+    kwargs=_arnold_dtc_spec.kwargs,
+    additional_wrappers=(
+        *_arnold_dtc_spec.additional_wrappers,
+        gym.wrappers.AutoResetWrapper.wrapper_spec(),
+        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFAULT_REWARD_FUNCS),
+    ),
+)
+
 
 # _arnold_dtc_spec = gym.spec("sa/Deathmatch-v0")
 # gym.register(

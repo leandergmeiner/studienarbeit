@@ -23,10 +23,11 @@ from einops import rearrange
 logger = getLogger()
 
 ArnoldModelType = Literal["dqn_ff", "dqn_rnn"]
-ArnoldScenarioType = Literal["defend_the_center", "shotgun"]
+ArnoldScenarioType = Literal["defend_the_center", "health_gathering", "shotgun", "deathmatch"]
 
 MODEL_PATHS: dict[ArnoldScenarioType, Path] = {
     "defend_the_center": Path("pretrained/arnold/pretrained/defend_the_center.pth"),
+    "health_gathering": Path("pretrained/arnold/pretrained/health_gathering.pth"),
     "shotgun": Path("pretrained/arnold/pretrained/deathmatch_shotgun.pth"),
     "deathmatch": Path("pretrained/arnold/pretrained/vizdoom_2017_track1.pth"),
 }
@@ -116,6 +117,13 @@ class ArnoldAgent(torch.nn.Module):
                 speed="on",
                 crouch="off",
                 # labels_mapping="",
+            )
+        elif scenario == "health_gathering":
+            params.update(
+                # frame_skip=2, Not needed; Handled by TorchRL Transform
+                network_type="dqn_ff",
+                action_combinations="move_fb;turn_lr",
+                game_variables=[('health', 101)]
             )
         else:
             raise ValueError(f"Unknown scenario: {scenario}")

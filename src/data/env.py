@@ -60,12 +60,6 @@ class EnvWithTransforms(NamedTuple):
     make_transforms: Callable[[], list[torchrl.envs.Transform]]
 
 
-# Warning: The wanted variables need to match the order of the available game variables
-ARNOLD_DTC_ENV_WANTED_GAME_VARIABLES = [
-    vzd.GameVariable.HEALTH,
-    vzd.GameVariable.SELECTED_WEAPON_AMMO,
-]
-
 ARNOLD_DTC_ENV_AVAILABLE_ACTIONS = [
     vzd.Button.TURN_LEFT,
     vzd.Button.TURN_RIGHT,
@@ -73,9 +67,16 @@ ARNOLD_DTC_ENV_AVAILABLE_ACTIONS = [
 ]
 
 
-def _arnold_make_transforms(frame_skip: int = 2):
+# Warning: The wanted variables need to match the order of the available game variables
+def _arnold_make_transforms(
+    frame_skip: int = 2,
+    game_variables=[
+        vzd.GameVariable.HEALTH,
+        vzd.GameVariable.SELECTED_WEAPON_AMMO,
+    ],
+):
     # TODO: Solve this more elegantly using categorical actions specs in the env.
-    game_variables_mask = get_game_variables_mask(ARNOLD_DTC_ENV_WANTED_GAME_VARIABLES)
+    game_variables_mask = get_game_variables_mask(game_variables)
     # action_projection = get_action_up_projection(ARNOLD_DTD_ENV_AVAILABLE_ACTIONS)
     return [
         *standard_env_transforms(),
@@ -100,11 +101,18 @@ def _arnold_make_transforms(frame_skip: int = 2):
         ),  # from Arnold DefendTheCenter config
     ]
 
+
 # TODO: Health gathering
 
 ENV_TRANSFORMS = {
     "sa/ArnoldDefendCenter-v0": EnvWithTransforms(
         base_env="sa/ArnoldDefendCenter-v0", make_transforms=_arnold_make_transforms
+    ),
+    "sa/ArnoldHealthGathering-v0": EnvWithTransforms(
+        base_env="sa/ArnoldHealthGathering-v0",
+        make_transforms=partial(
+            _arnold_make_transforms, game_variables=[vzd.GameVariable.HEALTH]
+        ),
     ),
     "sa/ArnoldDeathmatch-v0": EnvWithTransforms(
         base_env="sa/ArnoldDeathmatch-v0", make_transforms=_arnold_make_transforms
@@ -132,7 +140,7 @@ def make_env(
             transforms_list = env_transforms.make_transforms()
         else:
             transforms_list = standard_env_transforms()
-            
+
         if max_seen_rtg is not None:
             transforms_list.append(torchrl.envs.TargetReturn(max_seen_rtg))
 

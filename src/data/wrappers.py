@@ -214,13 +214,11 @@ class VizdoomEnvFromGame(VizdoomEnv):
 
         # specify observation space(s)
         self.observation_space = self._VizdoomEnv__get_observation_space()
-        
+
         # self.game.add_game_args("+viz_nocheat 1")
         # self.game.add_game_args("+viz_respawn_delay 10")
-        
-        self.game.set_console_enabled(True)
-        
+
+        # self.game.set_console_enabled(True)
+
         # self.game.add_game_args("+vid_forcesurface 1")
         self.game.init()
-            
-        

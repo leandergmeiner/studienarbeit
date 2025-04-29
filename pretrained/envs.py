@@ -205,48 +205,35 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
 
         action_builder = ActionBuilder(params)
 
-        if scenario_type == "defend_the_center":
-            return ArnoldGame(
-                scenario="defend_the_center",
-                action_builder=action_builder,
-                freedoom=params.freedoom,
-                use_screen_buffer=params.use_screen_buffer,
-                use_depth_buffer=params.use_depth_buffer,
-                labels_mapping="",
-                game_features=params.game_features,
-                mode="PLAYER",
-                player_rank=params.player_rank,
-                players_per_game=params.players_per_game,
-                render_hud=params.render_hud,
-                render_crosshair=params.render_crosshair,
-                render_weapon=params.render_weapon,
-                freelook=params.freelook,
-                visible=False,
-                screen_format="RGB24",
-            )
+        if scenario_type in ("defend_the_center", "health_gathering"):
+            scenario = scenario_type
         elif scenario_type == "deathmatch":
-            return ArnoldGame(
-                scenario=params.wad,
-                action_builder=action_builder,
-                score_variable="FRAGCOUNT",
-                freedoom=params.freedoom,
-                use_screen_buffer=params.use_screen_buffer,
-                use_depth_buffer=params.use_depth_buffer,
-                labels_mapping="",
-                game_features=params.game_features,
-                mode="PLAYER",
-                player_rank=params.player_rank,
-                players_per_game=params.players_per_game,
-                render_hud=params.render_hud,
-                render_crosshair=params.render_crosshair,
-                render_weapon=params.render_weapon,
-                n_bots=params.n_bots,
-                use_scripted_marines=params.use_scripted_marines,
-                visible=False,
-                screen_format="RGB24",
-            )
+            scenario = params.wad
         else:
             raise ValueError(f"Unknown scenario: {scenario_type}")
+
+        return ArnoldGame(
+            scenario=scenario,
+            action_builder=action_builder,
+            score_variable="FRAGCOUNT",
+            freedoom=params.freedoom,
+            use_screen_buffer=params.use_screen_buffer,
+            use_depth_buffer=params.use_depth_buffer,
+            labels_mapping="",
+            game_features=params.game_features,
+            mode="PLAYER",
+            player_rank=params.player_rank,
+            players_per_game=params.players_per_game,
+            render_hud=params.render_hud,
+            render_crosshair=params.render_crosshair,
+            render_weapon=params.render_weapon,
+            freelook=params.freelook,
+            n_bots=params.n_bots,
+            use_scripted_marines=params.use_scripted_marines,
+            visible=False,
+            screen_format="RGB24",
+            respawn_protect=params.respawn_protect,
+        )
 
 
 gym.register(
@@ -266,6 +253,28 @@ gym.register(
         freelook=False,
         action_combinations="turn_lr+attack",
         map_id=1,
+    ),
+)
+gym.register(
+    "arnold/HealthGathering-v0",
+    VizdoomArnoldEnv,
+    kwargs=dict(
+        scenario="health_gathering",
+        supreme=True,
+        freedoom=True,
+        use_screen_buffer=True,
+        use_depth_buffer=False,
+        game_features="",
+        player_rank=0,
+        players_per_game=1,
+        render_hud=False,
+        render_crosshair=False,
+        render_weapon=False,
+        respawn_protect=False,
+        freelook=False,
+        action_combinations="move_fb;turn_lr",
+        map_id=1,
+        n_bots=0,
     ),
 )
 
