@@ -1,10 +1,15 @@
 import lightning as L
 import torch
-from tensordict import TensorDict
-from tensordict.nn import TensorDictModule
+from tensordict import TensorDict, TensorDictBase
+from tensordict.nn import TensorDictModule, dispatch
+from typing import Optional
 
-from modules.types import TrajectoryModel
-
+import torchrl
+from src.modules.types import TrajectoryModel
+from torchrl.modules import (
+    ProbabilisticActor,
+)
+from tensordict.nn.probabilistic import InteractionType
 
 class DTActor(torch.nn.Module):
     def __init__(self, model: TrajectoryModel, hidden_dim: int, action_dim: int):
@@ -28,44 +33,152 @@ class DTActor(torch.nn.Module):
         )
         return self.action_layer(hidden_state)
 
-class LightningActor(L.LightningModule):
+
+class DTInferenceWrapper(torchrl.modules.DecisionTransformerInferenceWrapper):
     def __init__(
         self,
-        actor: TensorDictModule,
+        policy: TensorDictModule,
+        *,
+        inference_context: int = 5,
+        spec: Optional[torchrl.data.TensorSpec] = None,
+        device: torch.device | None = None,
+    ):
+        super().__init__(
+            policy, inference_context=inference_context, spec=spec, device=device
+        )
+
+    @staticmethod
+    def _check_tensor_dims(reward, obs, action):
+        if not (reward.shape[:-1] == obs.shape[:-3] == action.shape[:-1]) or not (
+            obs.shape[-3] == 3
+        ):
+            raise ValueError("Mismatched tensor dimensions.")
+
+    def mask_context(self, tensordict: TensorDictBase) -> TensorDictBase:
+        """Mask the context of the input sequences."""
+        observation = tensordict.get(self.observation_key).clone()
+        action = tensordict.get(self.action_key).clone()
+        return_to_go = tensordict.get(self.return_to_go_key).clone()
+        self._check_tensor_dims(return_to_go, observation, action)
+
+        observation[..., : -self.inference_context, :, :, :] = 0
+        action[..., : -(self.inference_context - 1), :] = (
+            0  # as we add zeros to the end of the action
+        )
+        action = torch.cat(
+            [
+                action[..., 1:, :],
+                torch.zeros(
+                    *action.shape[:-2], 1, action.shape[-1], device=action.device
+                ),
+            ],
+            dim=-2,
+        )
+        return_to_go[..., : -self.inference_context, :] = 0
+
+        tensordict.set(self.observation_key, observation)
+        tensordict.set(self.action_key, action)
+        tensordict.set(self.return_to_go_key, return_to_go)
+        return tensordict
+
+
+class LightningSequenceActor(L.LightningModule):
+    def __init__(
+        self,
+        model: torch.nn.Module,
         criterion: torch.nn.Module,
+        inference_context: int = 512,
+        lr=0.01,
         metrics: dict[str, torch.nn.Module] | None = None,
-        actor_out_key: str | None = None,
-        out_key: str | None = "action",
-        target_key: str = "target",
+        action_key="action",
+        out_action_key="action2",
+        observation_key="observation",
+        rtg_key="return_to_go",
+        labels_key="labels",
     ):
         super().__init__()
 
-        self.actor = actor
-        self.criterion = criterion
+        self.action_key = action_key
+        self.out_action_key = out_action_key
+        self.observation_key = observation_key
+        self.rtg_key = rtg_key
+        self.labels_key = labels_key
 
+        self.lr = lr
+
+        self.transformer = model
+
+        model = TensorDictModule(
+            model,
+            in_keys=[self.observation_key, self.action_key, self.rtg_key],
+            out_keys=["logits"],
+        )
+        
+        self.actor = ProbabilisticActor(
+            model,
+            in_keys=["logits"],
+            out_keys=[self.out_action_key],
+            distribution_class=torch.distributions.OneHotCategorical,
+            # distribution_class=RelaxedBernoulli,
+            # distribution_kwargs=dict(temperature=1.0), # TODO
+            default_interaction_type=InteractionType.RANDOM,
+        )
+
+        self.inference_actor = DTInferenceWrapper(self.actor, inference_context=inference_context)
+
+        self.inference_actor.set_tensor_keys(
+            observation=self.observation_key,
+            action=self.action_key,
+            return_to_go=self.rtg_key,
+            out_action=self.out_action_key,
+        )
+
+        self.criterion = criterion
         self.metrics = metrics or {}
+        self.used_actor = None
 
-        assert len(self.actor.out_keys) > 0
-        self.actor_out_key = actor_out_key or self.actor.out_keys[-1]
-        self.out_key = out_key
-        self.target_key = target_key
+    @dispatch
+    def forward(self, tensordict: TensorDict) -> TensorDict:
+        # TODO: This is whack
+        tensordict = tensordict.clone(False)
+        if tensordict.batch_size:
+            tensordict.batch_size = tensordict.batch_size[:-1]
 
-        self.criterion = criterion
-
-    def forward(self, batch: TensorDict) -> TensorDict:
-        out = self.actor(batch)
-        out[self.out_key] = out[self.actor_out_key]
-
+        out: TensorDict = self.used_actor(tensordict)
         return out
 
     def training_step(self, batch: TensorDict):
+        labels = batch[self.labels_key]
         out = self.forward(batch)
+        loss = self.criterion(out["logits"], labels)
         
-        # TODO: How to go about the loss?
-        target_actions = batch[self.target_key]
-        # Key must be "loss"
-        out["loss"] = self.criterion(out[self.actor_out_key], target_actions)
+        return {"loss": loss}
+
+    def on_predict_start(self):
+        self.used_actor = self.inference_actor
+        
+    def on_train_start(self):
+        self.used_actor = self.actor
+        
+    def on_train_end(self):
+        self.used_actor = None
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     @property
     def device(self):
         return self.actor.device
+
+    @property
+    def in_keys(self):
+        return [self.observation_key, self.action_key, self.rtg_key]
+
+    @property
+    def out_keys(self):
+        return sorted(
+            set(self.actor.out_keys).union(
+                {self.observation_key, self.action_key, self.rtg_key}
+            ),
+            key=str,
+        )

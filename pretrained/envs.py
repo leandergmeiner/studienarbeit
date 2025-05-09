@@ -176,7 +176,11 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
         params = dotdict(kwargs)
         self.params = params
 
-        arnold_game: ArnoldGame = self._get_arnold_game(scenario, dotdict(kwargs))
+        self.params.n_bots = self.params.n_bots or 0
+        self.params.respawn_protect = self.params.respawn_protect or False
+        self.params.spawn_farthest = self.params.spawn_farthest or False
+
+        arnold_game: ArnoldGame = self._get_arnold_game(scenario, self.params)
         arnold_game.start(params.map_id)
 
         if params.n_bots:
@@ -274,7 +278,6 @@ gym.register(
         freelook=False,
         action_combinations="move_fb;turn_lr",
         map_id=1,
-        n_bots=0,
     ),
 )
 
@@ -296,7 +299,7 @@ gym.register(
         action_combinations="move_fb+move_lr;turn_lr;attack",
         map_id=7,
         wad="deathmatch_shotgun",
-        n_bots=2,
+        n_bots=8,
         use_scripted_marines=True,
     ),
     additional_wrappers=(

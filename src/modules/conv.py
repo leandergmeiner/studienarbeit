@@ -9,9 +9,11 @@ from torch import Tensor, nn
 class PatchEmbedding(nn.Module):
     def __init__(
         self,
-        base: nn.Conv2d | None,
+        base: nn.Conv2d,
         depth: int,
+        num_patches: int,
         method: Literal["center"] | Literal["uniform"] = "center",
+        additional_tokens: bool = True,
     ):
         super().__init__()
 
@@ -21,17 +23,36 @@ class PatchEmbedding(nn.Module):
             warnings.warn(
                 f"{method=} is used and depth is even, therefore a center can not be determined.\n Using {depth=}"
             )
+            
+        self.depth = depth
 
-        self.conv = _conv2d_to_conv3d(base, depth, depth_stride=depth, method=method)
+        conv = _conv2d_to_conv3d(base, depth, depth_stride=depth, method=method)
 
         self.patch_embedding = nn.Sequential(
             Rearrange("b t c h w -> b c t h w"),
-            self.conv,
+            conv,
             Rearrange("b c t h w -> b t (h w) c"),
         )
+        
+        self.states_cls_token = nn.Parameter(torch.zeros(1, conv.out_channels))
+        self.states_distillation_token = nn.Parameter(torch.zeros(1, conv.out_channels))
+        
+        self.additional_tokens = additional_tokens
+        num_additional_tokens = 2 if additional_tokens else 0
+        self.states_position_embeddings = nn.Parameter(torch.zeros(1, num_patches + num_additional_tokens, conv.out_channels))
+
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.patch_embedding(x)
+        embeddings: Tensor = self.patch_embedding(x)
+        b,t = embeddings.shape[:2]
+
+        if self.additional_tokens:
+            cls_tokens = self.states_cls_token.expand(b, t, -1, -1)
+            distillation_tokens = self.states_distillation_token.expand(b, t, -1, -1)
+            embeddings = torch.cat((cls_tokens, distillation_tokens, embeddings), dim=-2)
+        
+        embeddings += self.states_position_embeddings
+        return embeddings       
 
 
 # Incomplete conversion from conv2d to conv3d (e.g. missing padding)
@@ -56,7 +77,7 @@ def _conv2d_to_conv3d(
         weight = rearrange(conv2d.weight, "o i h w -> o i () h w")
         weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, depth // 2, depth // 2))
     elif method == "uniform":
-        weight = repeat(conv2d.weight, "o i h w -> o i d h w", d=depth)
+        weight = repeat(conv2d.weight.clone(), "o i h w -> o i d h w", d=depth).clone()
         weight /= depth
     else:
         raise ValueError(method)

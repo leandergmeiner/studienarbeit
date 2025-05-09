@@ -45,14 +45,14 @@ def get_action_up_projection(
 
 
 def standard_env_transforms():
-    return [
+    return (
         torchrl.envs.RenameTransform(in_keys=["screen"], out_keys=["pixels"]),
         torchrl.envs.ToTensorImage(from_int=False, dtype=torch.uint8),
         torchrl.envs.RenameTransform(
             in_keys=["pixels"], out_keys=[("original", "pixels")], create_copy=True
         ),
         # torchrl.envs.Resize(120, 160, in_keys=[("original", "pixels")]),
-    ]
+    )
 
 
 class EnvWithTransforms(NamedTuple):
@@ -78,7 +78,7 @@ def _arnold_make_transforms(
     # TODO: Solve this more elegantly using categorical actions specs in the env.
     game_variables_mask = get_game_variables_mask(game_variables)
     # action_projection = get_action_up_projection(ARNOLD_DTD_ENV_AVAILABLE_ACTIONS)
-    return [
+    return (
         *standard_env_transforms(),
         torchrl.envs.UnaryTransform(
             in_keys=["gamevariables"],
@@ -99,7 +99,7 @@ def _arnold_make_transforms(
         torchrl.envs.FrameSkipTransform(
             frame_skip
         ),  # from Arnold DefendTheCenter config
-    ]
+    )
 
 
 # TODO: Health gathering
@@ -128,16 +128,18 @@ ENV_TRANSFORMS = {
 # TODO: TargetReturn
 def make_env(
     env,
-    num_workers: int | None = None,
-    transforms=[],
+    num_workers: int = 1,
+    transforms: list | None = None,
     max_seen_rtg: float | None = None,
     **kwargs,
 ):
-    def _make_env(env_name: str, transforms_list: list = standard_env_transforms):
+    
+    def _make_env(env_name: str, transforms_list: list | None):
+        transforms_list = transforms_list or []
         if env_name in ENV_TRANSFORMS:
             env_transforms = ENV_TRANSFORMS[env_name]
             env_name = env_transforms.base_env
-            transforms_list = env_transforms.make_transforms()
+            transforms_list.extend(env_transforms.make_transforms())
         else:
             transforms_list = standard_env_transforms()
 
@@ -157,11 +159,12 @@ def make_env(
         _make_env, dict(env_name=env, transforms_list=transforms), **kwargs
     )
 
-    if num_workers is not None and num_workers > 0:
+    if num_workers:
         # TODO FIXME: ParallelEnv
         return torchrl.envs.SerialEnv(num_workers, env_creator)
     else:
-        return _make_env(env, transforms_list=transforms)
+        return torchrl.envs.SerialEnv(1, env_creator)
+
 
 
 # %%

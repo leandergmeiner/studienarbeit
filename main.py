@@ -1,18 +1,10 @@
 # %%
 import torch
-from tensordict import TensorDict
-from tensordict.nn import TensorDictModule
-from tensordict.nn.probabilistic import InteractionType
-from torch.distributions import Bernoulli
-from torchrl.modules import (
-    ProbabilisticActor,
-)
-from torchtune.modules import RotaryPositionalEmbeddings
+from lightning import Trainer
 from transformers import AutoModel, GPT2Config, GPT2Model
 
-from modules import DTActor, LightningActor, PatchEmbedding, VideoDT
-
-# from data.doom import get_offline_datasets, get_online_datasets
+from src.data.doom import DoomOfflineDataModule
+from src.modules import DTActor, LightningSequenceActor, PatchEmbedding, VideoDT
 
 # from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
 
@@ -22,27 +14,26 @@ from modules import DTActor, LightningActor, PatchEmbedding, VideoDT
 
 base_vit = AutoModel.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
 
-hidden_size = 192
+hidden_size = base_vit.encoder.layer[0].layernorm_after.normalized_shape[0]
 
-# Aggregate information over 5 frames, this will also have a "smoothing" effect on the models actions
-depth = 1
+# Aggregate information over 4 frames, this will also have a "smoothing" effect on the models actions
+depth = 4
 base_conv = base_vit.embeddings.patch_embeddings.projection
 max_patches = 2048
-num_spatial_heads = 8
+num_spatial_heads = base_vit.encoder.layer[0].attention.attention.num_attention_heads
 num_temporal_heads = 8
 
-max_seq_len = 200
+max_seq_len = 512 * 3
 
-num_actions = 12
+num_actions = 9 # TODO
 
-# TODO: Convert to class
 temporal_transformer = GPT2Model(
     GPT2Config(
         vocab_size=1,
         n_embd=hidden_size,
         n_positions=max_seq_len,
         n_inner=max_seq_len,
-        n_layer=6,
+        n_layer=12,
         n_head=num_temporal_heads,
     )
 )
@@ -50,13 +41,11 @@ temporal_transformer = GPT2Model(
 transformer = DTActor(
     VideoDT(
         hidden_size=hidden_size,
-        patching=PatchEmbedding(base_conv, depth),
+        patching=PatchEmbedding(
+            base_conv, depth, base_vit.embeddings.patch_embeddings.num_patches, "uniform"
+        ),
         # TODO: Read RotaryPositionalEmbeddings paper
         # TODO: Calculate max_patches based on max_seq_len
-        pos_embedding=RotaryPositionalEmbeddings(
-            hidden_size // num_spatial_heads,
-            max_patches,
-        ),
         num_spatial_heads=num_spatial_heads,
         num_temporal_heads=num_temporal_heads,
         spatial_transformer=base_vit.encoder,
@@ -66,31 +55,11 @@ transformer = DTActor(
     action_dim=num_actions,
 )
 
-# TODO: Reward key: ("next", "reward")
-actor = ProbabilisticActor(
-    TensorDictModule(
-        transformer,
-        in_keys=["observation", "action", "return_to_go"],
-        out_keys=["logits"],
-    ),
-    in_keys=["logits"],
-    out_keys=["action"],
-    distribution_class=Bernoulli,
-    default_interaction_type=InteractionType.RANDOM,
-)
-
-model = LightningActor(
-    actor,
+model = LightningSequenceActor(
+    transformer,
     criterion=torch.nn.CrossEntropyLoss(),
-    actor_out_key="logits",
+    labels_key="target_action",
 )
-
-# data_module = LightningDataModule.from_datasets(
-#     itertools.chain(
-#         get_offline_datasets(),
-#         get_online_datasets(DecisionTransformerInferenceWrapper(model, inference_context=max_seq_len)),
-#     )
-# )
 
 # TODO: Use FuseLAMB (Large Batch Optimization for Deep Learning: Training BERT in 76 minutes)
 # TODO: Use OnlineDTLoss
@@ -99,25 +68,16 @@ model = LightningActor(
 # TODO: Use Lightning StreamingDataset
 
 # %%
-# Test
-torch.manual_seed(0)
-batch_size = 1
-observation = torch.randn((batch_size, 1, 3, 224, 224))
-action = torch.randn(
-    (batch_size, 0, 12)
-)  # FIXME: Can't pass in action size 0. This is necessary to start, though
-return_to_go = torch.randn((batch_size, 1, 1))
 
-inputs = TensorDict(
-    {"observation": observation, "action": action, "return_to_go": return_to_go},
-    batch_size,
-)
+# TODO: Maybe use DeiTImageProcesseor
 
-outputs = actor(inputs)
-# x = next_action(x)
-print(outputs["action"])
 
-# envs = VectorAggregateWrapper(gym.make_vec("doom"), initial_factory=Trajectory, aggregate=Trajectory.aggregate)
-# dataloader = OnlineGymnasiumDataloader(envs, replay_buffer=TODO, return_to_go=TODO, max_ep_len=25_000, max_new_rounds=envs.num_envs)
+def main():
+    trainer = Trainer()
+    trainer.fit(model, datamodule=DoomOfflineDataModule())
+
+
+if __name__ == "__main__":
+    main()
 
 # %%

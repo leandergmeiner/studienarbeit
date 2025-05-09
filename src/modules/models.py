@@ -12,7 +12,6 @@ class VideoDT(nn.Module):
         self,
         hidden_size: int,
         patching: nn.Module,
-        pos_embedding: nn.Module,
         spatial_transformer: nn.Module,
         temporal_transformer: nn.Module,
         num_spatial_heads: int,
@@ -24,19 +23,23 @@ class VideoDT(nn.Module):
         self.hidden_size = hidden_size
 
         self.patching = patching
-        self.pos_embedding = pos_embedding
+        
+        # TODO: This is whack
+        self.frame_skip = patching.depth
+
         self.spatial_transformer = spatial_transformer
         self.temporal_transformer = temporal_transformer
 
-        self.embed_action = nn.LazyLinear(self.hidden_size)
+        self.embed_states = nn.LazyLinear(self.hidden_size)
         self.embed_return = nn.LazyLinear(self.hidden_size)
+        self.embed_action = nn.LazyLinear(self.hidden_size)
 
         self.space_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
         self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
 
         self.dropout = dropout
 
-        self.temp_norm = nn.LayerNorm(hidden_size)
+        self.embedding_ln = nn.LayerNorm(hidden_size)
 
         self.num_spatial_heads = num_spatial_heads
         self.num_temporal_heads = num_temporal_heads
@@ -49,45 +52,25 @@ class VideoDT(nn.Module):
         *,
         attention_mask: Tensor | None = None,
     ) -> Tensor:
-        patches: Tensor = self.patching(observation)
+        assert observation.shape[1] % self.frame_skip == 0
+        
+        states = self.get_states(observation)
+        action = action[..., ::self.frame_skip, :]
+        return_to_go = return_to_go[..., ::self.frame_skip, :]
 
-        b, t = patches.shape[:2]
+        b, t = states.shape[:2]
 
-        cls_space_token = repeat(self.space_token, "() n d -> b t n d", b=b, t=t)
-        # cls_temporal_token = repeat(self.temporal_token, "() n d -> b n d", b=b)
-
-        patches = torch.cat([cls_space_token, patches], dim=2)
-        patches = rearrange(
-            patches, "b t n (h d) -> b (t n) h d", h=self.num_spatial_heads
-        )
-        patches = self.pos_embedding(patches)
-        patches = rearrange(patches, "b (t n) h d -> b t n (h d)", t=t)
-        patches = self.dropout(patches)
-
-        patches = rearrange(patches, "b t ... -> (b t) ...")
-        embedded_states: Tensor = self.spatial_transformer(patches)
-
-        if isinstance(embedded_states, Mapping):
-            embedded_states = embedded_states["last_hidden_state"]
-
-        embedded_states = rearrange(embedded_states[:, 0], "(b t) ... -> b t ...", b=b, t=t)
-
+        embedded_states: Tensor = self.embed_states(states)
         embedded_actions: Tensor = self.embed_action(action)
         embedded_returns: Tensor = self.embed_return(return_to_go)
 
+        # Order matters here
         embeddings = [embedded_returns, embedded_states, embedded_actions]
 
-        x: Tensor = rearrange(
-            embeddings, "e b n (h d) -> e b n h d", h=self.num_temporal_heads
-        )
-        x = vmap(self.pos_embedding)(x)
-        x = rearrange(x, "e b n h d -> b (n e) (h d)")
+        # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
+        # which works nice in an autoregressive sense since states predict actions
+        stacked_inputs: Tensor = rearrange(embeddings, "e b n d -> b (n e) d")
 
-        # TODO We don't need a temporal_token
-        # The temporal model should keep add one itself
-        # x = torch.cat([cls_temporal_token, x], dim=1)
-
-        # TODO: Is this correct?
         stacked_attention_mask = (
             repeat(
                 attention_mask,
@@ -100,18 +83,39 @@ class VideoDT(nn.Module):
             else None
         )
 
-        print(x.shape)
+        stacked_inputs = self.embedding_ln(stacked_inputs)
 
-        x = self.temp_norm(x)
-        x = self.temporal_transformer(
-            inputs_embeds=x, attention_mask=stacked_attention_mask
+        position_ids = repeat(
+            torch.arange(t), "t -> b (t e)", b=b, e=len(embeddings)
+        ).to(stacked_inputs.device)
+        
+        outputs = self.temporal_transformer(
+            inputs_embeds=stacked_inputs,
+            position_ids=position_ids,
+            attention_mask=stacked_attention_mask,
         )
 
-        if isinstance(x, Mapping):
-            x = x["last_hidden_state"]
+        if isinstance(outputs, Mapping):
+            outputs = outputs["last_hidden_state"]
 
-        x = rearrange(x, "b (n e) d -> b e n d", e=len(embeddings))
+        outputs = rearrange(outputs, "b (n e) d -> b e n d", e=len(embeddings))
 
-        # TODO: is it x[:, 1] or x[:, 2] ??
-        # Take each aggregated state (idx 1) to later predict the next action
-        return x[:, 1]
+        # Take each aggregated state (index 1) to later predict the next action
+        outputs = outputs[:, 1]
+    
+        # Since we've "compressed" the actions by only taking every frame_skip-th action,
+        # we reverse that action for gradient descent.
+        return repeat(outputs, "b n d -> b (n r) d", r=self.frame_skip)
+    
+    def get_states(self, observation: Tensor):
+        patches = self.patching(observation)        
+        patches = self.dropout(patches)
+
+        states: Tensor = vmap(self.spatial_transformer)(patches)
+
+        if isinstance(states, Mapping):
+            states = states["last_hidden_state"]
+
+        states = states[..., 0, :] # b;t;embedding_dim
+        
+        return states

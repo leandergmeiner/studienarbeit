@@ -4,7 +4,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkdtemp
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, TypeVar
 
 import torch
 import torchrl
@@ -28,10 +28,75 @@ import numpy as np
 
 from einops import rearrange
 
+
+def default_observation_transform(
+    collector_out_key: str,
+    observation_shape: tuple[int, int] = (224, 224),
+    reward_key=("next", "reward"),
+):
+    inverse_transforms = torchrl.envs.Compose(
+        # TODO: Naming
+        torchrl.envs.Reward2GoTransform(in_keys=reward_key, out_keys=["return_to_go"]),
+        torchrl.envs.RenameTransform(
+            in_keys=[],
+            out_keys=[],
+            out_keys_inv=[
+                ("original", "pixels"),
+                ("next", "original", "pixels"),
+            ],
+            in_keys_inv=["pixels", ("next", "pixels")],
+        ),
+    )
+
+    forward_transforms = torchrl.envs.Compose(
+        # Forward
+        torchrl.envs.ToTensorImage(
+            in_keys=["pixels", ("next", "pixels")],
+            out_keys=["pixels", ("next", "pixels")],
+            shape_tolerant=True,
+        ),
+        # TODO: Already apply this for .inv(...)
+        torchrl.envs.DTypeCastTransform(
+            dtype_in=torch.int64,
+            dtype_out=torch.float,
+            in_keys=["action"],
+        ),
+        # TODO: Already apply this for .inv(...)
+        torchrl.envs.ExcludeTransform(
+            "original", ("next", "original"), "labels", "labels_buffer"
+        ),
+        torchrl.envs.UnaryTransform(
+            in_keys=[collector_out_key],
+            out_keys=["target_action"],
+            fn=lambda td: td.roll(shifts=-1, dims=-2),
+        ),
+        torchrl.envs.UnaryTransform(
+            in_keys=["pixels"],
+            out_keys=["pixels"],
+            fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
+        ),
+        torchrl.envs.Resize(observation_shape),
+    )
+
+    return torchrl.envs.Compose(
+        inverse_transforms,
+        forward_transforms,
+        # TODO: This Rename is awkward
+        torchrl.envs.RenameTransform(
+            in_keys=[
+                "pixels",
+                ("next", "pixels"),
+            ],
+            out_keys=[
+                "observation",
+                ("next", "observation"),
+            ],
+        ),
+    )
+
+
 # FIXME: Why is the batch size not constant when iterating???
-
-
-class GymnasiumStreamingDataset(TensorDictReplayBuffer):
+class GymnasiumStreamingDataset(TensorDictReplayBuffer, torch.utils.data.IterableDataset):
     def __init__(
         self,
         *,
@@ -41,18 +106,23 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer):
         max_traj_len: int,
         num_trajs: int,
         policy: Callable,
-        collector_maker: Callable,
         create_env_fn: Callable,
+        collector_maker: Callable,
+        collector_out_key: str = "action",
         num_workers: int | None = None,
         storage_maker: Callable = LazyTensorStorage,
-        collector_out_key: str = "action",
         max_seen_rtg: float | None = None,
+        make_transform: Callable = default_observation_transform,
+        make_transform_kwargs: dict = dict(),
+        reward_key=("next", "reward"),
         **kwargs,
     ):
         if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
             warnings.warn(
                 "`storage` or `sampler` keyword was passed. Their values are ignored."
             )
+
+        assert max_traj_len >= batch_traj_len
 
         storage_size = num_trajs * max_traj_len
 
@@ -66,6 +136,8 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer):
         self.storage_size = storage_size
         self.max_traj_len = max_traj_len
 
+        self.reward_key = reward_key
+
         # TODO: Env Batch Size
         storage = storage_maker(
             self.storage_size, ndim=2 if self.num_workers is not None else 1
@@ -77,45 +149,10 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer):
             strict_length=False,
         )
 
-        transform = torchrl.envs.Compose(
-            # Inverse
-            torchrl.envs.Reward2GoTransform(),
-            torchrl.envs.RenameTransform(
-                in_keys=[],
-                out_keys=[],
-                out_keys_inv=[
-                    ("original", "pixels"),
-                    ("next", "original", "pixels"),
-                ],
-                in_keys_inv=["pixels", ("next", "pixels")],
-            ),
-            # Forward
-            torchrl.envs.ToTensorImage(
-                in_keys=["pixels", ("next", "pixels")],
-                out_keys=["pixels", ("next", "pixels")],
-                shape_tolerant=True,
-            ),
-            # TODO: Already apply this for .inv(...)
-            torchrl.envs.DTypeCastTransform(
-                dtype_in=torch.int64,
-                dtype_out=torch.bool,
-                in_keys=["action"],
-            ),
-            torchrl.envs.UnaryTransform(
-                in_keys=[self.collector_out_key],
-                out_keys=["target_action"],
-                fn=lambda td: td.roll(shifts=-1, dims=-2),
-            ),
-            # TODO: Already apply this for .inv(...)
-            torchrl.envs.ExcludeTransform(
-                "original", ("next", "original"), "labels", "labels_buffer"
-            ),
-            torchrl.envs.UnaryTransform(
-                in_keys=["pixels"],
-                out_keys=["pixels"],
-                fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
-            ),
-            torchrl.envs.Resize(160, 120),
+        transform = make_transform(
+            collector_out_key=collector_out_key,
+            reward_key=self.reward_key,
+            **make_transform_kwargs,
         )
 
         batch_size_transitions = batch_size * batch_traj_len
@@ -152,10 +189,10 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer):
             for td in data_iterator:
                 # [:-1] -> Exclude the time dimension from the #trajectories calculation.
                 num_current_trajs += td.batch_size[:-1].numel()
-                
+
                 # Update max seen reward
                 self._max_seen_rtg = max(
-                    self._max_seen_rtg, np.float64(td["reward_to_go"].max())
+                    self._max_seen_rtg, np.float64(td[self.reward_key].max())
                 )
 
                 yield td
@@ -169,7 +206,20 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer):
     def max_seen_rtg(self) -> np.float64:
         return self._max_seen_rtg
 
-# %%
+
+T = TypeVar("T")
+
+
+class LazyChainDataset(torch.utils.data.IterableDataset):
+    def __init__(self, datasets: Iterable[torch.utils.data.Dataset[T]]):
+        super().__init__()
+        self.datasets = datasets
+
+    def __iter__(self):
+        for d in self.datasets:
+            yield from d
+
+
 @dataclass
 class DataGenSpec:
     collector_maker: Callable
