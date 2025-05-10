@@ -23,7 +23,9 @@ from einops import rearrange
 logger = getLogger()
 
 ArnoldModelType = Literal["dqn_ff", "dqn_rnn"]
-ArnoldScenarioType = Literal["defend_the_center", "health_gathering", "shotgun", "deathmatch"]
+ArnoldScenarioType = Literal[
+    "defend_the_center", "health_gathering", "shotgun", "deathmatch"
+]
 
 MODEL_PATHS: dict[ArnoldScenarioType, Path] = {
     "defend_the_center": Path("pretrained/arnold/pretrained/defend_the_center.pth"),
@@ -37,6 +39,7 @@ class ArnoldAgent(torch.nn.Module):
     def __init__(
         self,
         scenario: ArnoldScenarioType = "defend_the_center",
+        batch_size: int = 32,
         model_path: Path | None = None,
         available_buttons: list[vzd.Button] | None = None,
     ):
@@ -64,12 +67,13 @@ class ArnoldAgent(torch.nn.Module):
             height=60,
             width=108,
             hist_size=4,
-            gpu_id=-1,  # We will move the model to the GPU ourselves
+            # gpu_id=-1,  # We will move the model to the GPU ourselves
+            gpu_id=-1, # TODO FIXME
             speed="off",
             crouch="off",
             use_continuous=False,
             game_variables=[("health", 101), ("sel_ammo", 301)],
-            batch_size=32,
+            batch_size=batch_size,
             replay_memory_size=1000000,
             start_decay=0,
             stop_decay=1000000,
@@ -92,7 +96,6 @@ class ArnoldAgent(torch.nn.Module):
                 n_rec_updates=1,
                 remember=True,
                 hist_size=6,
-                batch_size=1,
                 # game_features="target,enemy",
                 bucket_size="[10, 1]",
                 dropout=0.5,
@@ -109,7 +112,6 @@ class ArnoldAgent(torch.nn.Module):
                 n_rec_updates=1,
                 remember=True,
                 hist_size=4,
-                batch_size=1,
                 # game_features="target,enemy",
                 bucket_size="[10, 1]",
                 dropout=0.5,
@@ -123,7 +125,7 @@ class ArnoldAgent(torch.nn.Module):
                 # frame_skip=2, Not needed; Handled by TorchRL Transform
                 network_type="dqn_ff",
                 action_combinations="move_fb;turn_lr",
-                game_variables=[('health', 101)]
+                game_variables=[("health", 101)],
             )
         else:
             raise ValueError(f"Unknown scenario: {scenario}")
@@ -164,6 +166,7 @@ class ArnoldAgent(torch.nn.Module):
 
         self.params = params
         self.network = network
+        self.module = self.network.module
         self.screen_shape = self.network.screen_shape
 
         self.pixels_key = ("pixels",)

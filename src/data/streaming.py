@@ -9,6 +9,7 @@ from typing import Callable, Iterable, Iterator, TypeVar
 import torch
 import torchrl
 from tensordict import PersistentTensorDict, TensorDict
+from torchrl.envs import EnvCreator
 from torchrl.collectors import DataCollectorBase
 from torchrl.collectors.utils import split_trajectories
 from torchrl.data.datasets import BaseDatasetExperienceReplay
@@ -33,7 +34,12 @@ def default_observation_transform(
     collector_out_key: str,
     observation_shape: tuple[int, int] = (224, 224),
     reward_key=("next", "reward"),
+    exclude_next_observation: bool = False,
 ):
+    pixels_keys = (
+        ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
+    )
+
     inverse_transforms = torchrl.envs.Compose(
         # TODO: Naming
         torchrl.envs.Reward2GoTransform(in_keys=reward_key, out_keys=["return_to_go"]),
@@ -46,15 +52,22 @@ def default_observation_transform(
             ],
             in_keys_inv=["pixels", ("next", "pixels")],
         ),
+        torchrl.envs.ExcludeTransform("labels", "labels_buffer", inverse=True),
     )
+
+    if exclude_next_observation:
+        inverse_transforms.append(
+            torchrl.envs.ExcludeTransform(("next", "pixels"), inverse=True)
+        )
 
     forward_transforms = torchrl.envs.Compose(
         # Forward
         torchrl.envs.ToTensorImage(
-            in_keys=["pixels", ("next", "pixels")],
-            out_keys=["pixels", ("next", "pixels")],
+            in_keys=pixels_keys,
+            out_keys=pixels_keys,
             shape_tolerant=True,
         ),
+        torchrl.envs.ExcludeTransform("original", ("next", "original")),
         # TODO: Already apply this for .inv(...)
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.int64,
@@ -62,41 +75,51 @@ def default_observation_transform(
             in_keys=["action"],
         ),
         # TODO: Already apply this for .inv(...)
-        torchrl.envs.ExcludeTransform(
-            "original", ("next", "original"), "labels", "labels_buffer"
-        ),
         torchrl.envs.UnaryTransform(
             in_keys=[collector_out_key],
             out_keys=["target_action"],
             fn=lambda td: td.roll(shifts=-1, dims=-2),
         ),
         torchrl.envs.UnaryTransform(
-            in_keys=["pixels"],
-            out_keys=["pixels"],
+            in_keys=pixels_keys,
+            out_keys=pixels_keys,
             fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
         ),
-        torchrl.envs.Resize(observation_shape),
+        torchrl.envs.Resize(observation_shape, in_keys=pixels_keys),
     )
+
+    # TODO: This Rename is awkward
+    if exclude_next_observation:
+        forward_transforms.append(
+            torchrl.envs.RenameTransform(
+                in_keys=["pixels"],
+                out_keys=["observation"],
+            ),
+        )
+    else:
+        forward_transforms.append(
+            torchrl.envs.RenameTransform(
+                in_keys=[
+                    "pixels",
+                    ("next", "pixels"),
+                ],
+                out_keys=[
+                    "observation",
+                    ("next", "observation"),
+                ],
+            )
+        )
 
     return torchrl.envs.Compose(
         inverse_transforms,
         forward_transforms,
-        # TODO: This Rename is awkward
-        torchrl.envs.RenameTransform(
-            in_keys=[
-                "pixels",
-                ("next", "pixels"),
-            ],
-            out_keys=[
-                "observation",
-                ("next", "observation"),
-            ],
-        ),
     )
 
 
 # FIXME: Why is the batch size not constant when iterating???
-class GymnasiumStreamingDataset(TensorDictReplayBuffer, torch.utils.data.IterableDataset):
+class GymnasiumStreamingDataset(
+    TensorDictReplayBuffer, torch.utils.data.IterableDataset
+):
     def __init__(
         self,
         *,
@@ -106,7 +129,7 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer, torch.utils.data.Iterabl
         max_traj_len: int,
         num_trajs: int,
         policy: Callable,
-        create_env_fn: Callable,
+        create_env_fn: Callable | EnvCreator,
         collector_maker: Callable,
         collector_out_key: str = "action",
         num_workers: int | None = None,
@@ -120,6 +143,11 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer, torch.utils.data.Iterabl
         if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
             warnings.warn(
                 "`storage` or `sampler` keyword was passed. Their values are ignored."
+            )
+
+        if batch_size > num_trajs:
+            warnings.warn(
+                f"Can not utilize full batch size ({batch_size}), as only {num_trajs} are kept in memory at one time."
             )
 
         assert max_traj_len >= batch_traj_len
@@ -147,6 +175,8 @@ class GymnasiumStreamingDataset(TensorDictReplayBuffer, torch.utils.data.Iterabl
             truncated_key=None,
             slice_len=batch_traj_len,
             strict_length=False,
+            compile=True,
+            use_gpu=True,
         )
 
         transform = make_transform(

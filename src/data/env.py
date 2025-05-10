@@ -10,7 +10,6 @@ from src.data.common import DEFAULT_REWARD_FUNCS, DOOM_BUTTONS
 import src.data._gym_envs  # noqa: F401
 
 # %%
-# TODO: Return to go transform
 # TODO: Cat frames for transformer online learning
 
 
@@ -102,8 +101,6 @@ def _arnold_make_transforms(
     )
 
 
-# TODO: Health gathering
-
 ENV_TRANSFORMS = {
     "sa/ArnoldDefendCenter-v0": EnvWithTransforms(
         base_env="sa/ArnoldDefendCenter-v0", make_transforms=_arnold_make_transforms
@@ -114,6 +111,7 @@ ENV_TRANSFORMS = {
             _arnold_make_transforms, game_variables=[vzd.GameVariable.HEALTH]
         ),
     ),
+    # TODO:
     "sa/ArnoldDeathmatch-v0": EnvWithTransforms(
         base_env="sa/ArnoldDeathmatch-v0", make_transforms=_arnold_make_transforms
     ),
@@ -125,7 +123,6 @@ ENV_TRANSFORMS = {
 
 
 # TODO: GymEnv: categorical_action_encoding = True
-# TODO: TargetReturn
 def make_env(
     env,
     num_workers: int = 1,
@@ -133,7 +130,6 @@ def make_env(
     max_seen_rtg: float | None = None,
     **kwargs,
 ):
-    
     def _make_env(env_name: str, transforms_list: list | None):
         transforms_list = transforms_list or []
         if env_name in ENV_TRANSFORMS:
@@ -160,11 +156,10 @@ def make_env(
     )
 
     if num_workers:
-        # TODO FIXME: ParallelEnv
-        return torchrl.envs.SerialEnv(num_workers, env_creator)
+        return torchrl.envs.ParallelEnv(num_workers, env_creator)
     else:
+        # This is only here for testing
         return torchrl.envs.SerialEnv(1, env_creator)
-
 
 
 # %%

@@ -2,7 +2,11 @@ import gymnasium as gym
 import vizdoom.gymnasium_wrapper  # noqa: F401
 
 import pretrained.envs  # noqa: F401
-from src.data.common import DEFAULT_REWARD_FUNCS
+from src.data.common import (
+    DEFAULT_REWARD_FUNCS,
+    DEFEND_CENTER_REWARD_FUNCS,
+    HEALTH_GATHERING_REWARD_FUNCS,
+)
 from src.data.wrappers import VizdoomWithRewardWrapper
 
 # from src.data.common import DOOM_BUTTONS
@@ -26,7 +30,7 @@ gym.register(
     kwargs={"scenario_file": "defend_the_center.cfg"},
     additional_wrappers=(
         gym.wrappers.AutoResetWrapper.wrapper_spec(),
-        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFAULT_REWARD_FUNCS),
+        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFEND_CENTER_REWARD_FUNCS),
     ),
 )
 
@@ -48,7 +52,7 @@ gym.register(
     additional_wrappers=(
         *_arnold_dtc_spec.additional_wrappers,
         gym.wrappers.AutoResetWrapper.wrapper_spec(),
-        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFAULT_REWARD_FUNCS),
+        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFEND_CENTER_REWARD_FUNCS),
     ),
 )
 _arnold_dtc_spec = gym.spec("arnold/HealthGathering-v0")
@@ -59,7 +63,9 @@ gym.register(
     additional_wrappers=(
         *_arnold_dtc_spec.additional_wrappers,
         gym.wrappers.AutoResetWrapper.wrapper_spec(),
-        VizdoomWithRewardWrapper.wrapper_spec(reward_funcs=DEFAULT_REWARD_FUNCS),
+        VizdoomWithRewardWrapper.wrapper_spec(
+            reward_funcs=HEALTH_GATHERING_REWARD_FUNCS
+        ),
     ),
 )
 

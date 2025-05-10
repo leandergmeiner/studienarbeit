@@ -1,48 +1,86 @@
-from abc import abstractmethod
+import math
+from abc import abstractmethod, ABC
+from copy import deepcopy
 from functools import partial
-from typing import Callable, Final, Iterable, NamedTuple, Any
+from typing import Any, Callable, Iterable
+from dataclasses import dataclass
 
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from torchrl.collectors import SyncDataCollector
 
 from pretrained.models import ArnoldAgent
 from src.data.env import make_env
 from src.data.streaming import GymnasiumStreamingDataset, LazyChainDataset
 
-BATCH_SIZE = 8
 BATCH_TRAJ_LEN = 64  # TODO 192 / 3
-NUM_TRAJS = 2  # TODO
+NUM_WORKERS = 1  # TODO
 
 
-class StreamingDataModule(LightningDataModule):
-    class DatasetInfo(NamedTuple):
-        name: str
-        policy_maker: torch.nn.Module
-        create_env_fn: Callable
-        size: int
-        max_steps_per_traj: int
-        target_return_scaling_factor: float = 1.5
+@dataclass
+class DatasetInfo:
+    name: str
+    create_env_fn: Callable
+    size: int
+    max_steps_per_traj: int
+    policy_maker: torch.nn.Module | None = None
+    target_return_scaling_factor: float = 1.5
 
-    def __init__(self, *, batch_size=8, batch_traj_len=64, num_workers=0):
+
+# TODO: Increase max_steps_per_traj
+
+DOOM_DATASETS = [
+    DatasetInfo(
+        name="defend_the_center",
+        policy_maker=partial(ArnoldAgent, "defend_the_center"),
+        create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
+        size=1_000_000,  # TODO
+        max_steps_per_traj=500,  # TODO
+    ),
+    DatasetInfo(
+        name="health_gathering",
+        policy_maker=partial(ArnoldAgent, "health_gathering"),
+        create_env_fn=partial(make_env, "sa/ArnoldHealthGathering-v0"),
+        size=1_000_000,
+        max_steps_per_traj=500,  # TODO
+    ),
+    DatasetInfo(
+        name="shotgun",
+        policy_maker=partial(ArnoldAgent, "shotgun"),
+        create_env_fn=partial(make_env, "sa/ArnoldShotgun-v0"),
+        size=1_000_000,
+        max_steps_per_traj=750,  # TODO
+    ),
+]
+
+
+class StreamingDataModule(LightningDataModule, ABC):
+    def __init__(
+        self,
+        *,
+        batch_size=4,
+        batch_traj_len=64,
+        num_workers=0,
+        max_seen_rtgs: dict[str, np.float64] | None = None,
+    ):
         super().__init__()
         self.save_hyperparameters()
 
-        self.batch_size: Final = batch_size
-        self.batch_traj_len: Final = batch_traj_len
-        self.num_workers: Final = num_workers
-        self.num_trajs: Final = NUM_TRAJS  # TODO
+        self.batch_size = batch_size
+        self.batch_traj_len = batch_traj_len
+        self.num_workers = num_workers
+        self.num_trajs = batch_size  # TODO
 
-        self.max_seen_rtgs: dict[str, np.float64] = {}
+        self.max_seen_rtgs = max_seen_rtgs or {}
 
         # Needed for state loading
         self._start_index = 0
         self._dataset_start_index = 0
 
     def _train_dataset_iterator(self) -> Iterable[IterableDataset]:
-        for dataset_info in self.get_datasets()[self._start_index :]:
+        for dataset_info in self.datasets[self._start_index :]:
             max_seen_rtg = self.max_seen_rtgs.get(dataset_info.name)
             if max_seen_rtg is not None:
                 max_seen_rtg *= dataset_info.target_return_scaling_factor
@@ -58,28 +96,42 @@ class StreamingDataModule(LightningDataModule):
                 batch_size=self.batch_size,
                 batch_traj_len=self.batch_traj_len,
                 max_traj_len=dataset_info.max_steps_per_traj,
-                num_trajs=self.num_trajs,  # TODO: Maybe self.batch_size or self.num_workers?
+                num_trajs=self.num_trajs,
                 policy=dataset_info.policy_maker(),
-                collector_maker=SyncDataCollector,  # TODO
+                collector_maker=partial(
+                    SyncDataCollector,  # TODO
+                    # policy_device="cuda:0" if self.use_gpu else "cpu",
+                    # storing_device="cuda:0" if self.use_gpu else "cpu",
+                ),  # TODO
                 num_workers=self.num_workers,
                 create_env_fn=create_env_fn,
                 max_seen_rtg=max_seen_rtg,
-                make_transform_kwargs=dict(observation_shape=(224, 224)),
+                make_transform_kwargs=dict(
+                    observation_shape=(224, 224),
+                    exclude_next_observation=True,
+                ),  # TODO: This is whack
+                compilable=True,
             )
+            
+            self.current_dataset = dataset
 
             yield dataset
+            
+            self._start_index += 1
 
             self.max_seen_rtgs[dataset_info.name] = dataset.max_seen_rtg
 
     def _dataloader(self, datasets: Iterable[IterableDataset]):
-        return DataLoader(LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x)
-
+        return DataLoader(
+            LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x
+        )
 
     def train_dataloader(self) -> DataLoader:
         return self._dataloader(self._train_dataset_iterator())
-    
+
+    @property
     @abstractmethod
-    def get_datasets(self) -> list[DatasetInfo]: ...
+    def datasets(self) -> list[DatasetInfo]: ...
 
     def state_dict(self):
         return {
@@ -93,56 +145,42 @@ class StreamingDataModule(LightningDataModule):
 
 
 class DoomOfflineDataModule(StreamingDataModule):
-    def __init__(
-        self,
-        *,
-        batch_size=BATCH_SIZE,
-        batch_traj_len=BATCH_TRAJ_LEN,
-        num_workers=0,
-        max_seen_rewards: dict[str, np.float64] | None = None,
-    ):
-        super().__init__(
-            batch_size=batch_size,
-            batch_traj_len=batch_traj_len,
-            num_workers=num_workers,
-        )
+    @property
+    def datasets(self):
+        datasets = deepcopy(DOOM_DATASETS)
 
-        self.max_seen_rtgs = max_seen_rewards or {}
+        rounds = 100
 
-    def get_datasets(self):
-        return [
-            super().DatasetInfo(
-                name="defend_the_center",
-                policy_maker=partial(ArnoldAgent, "defend_the_center"),
-                create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
-                size=self.batch_size,  # TODO
-                max_steps_per_traj=500,  # TODO
-            )
-        ]
+        for d in datasets:
+            d.size = math.ceil(d.size / rounds)
+
+            # TODO: This is whack and only specific to Arnold Models
+            d.policy_maker = partial(d.policy_maker, batch_size=self.num_workers)
+
+        datasets = rounds * list(datasets)
+
+        return datasets
 
 
 class DoomOnlineDataModule(StreamingDataModule):
     def __init__(
         self,
         policy: Callable,
-        *,
-        batch_size: int = 8,
-        batch_traj_len: int = 64,
-        num_workers: int = 0,
+        **kwargs,
     ):
+        super().__init__(**kwargs)
         self.policy = policy
 
-        self.batch_size: Final = batch_size
-        self.batch_traj_len: Final = batch_traj_len
-        self.num_workers: Final = num_workers
-        self.num_trajs: Final = NUM_TRAJS  # TODO
+    @property
+    def datasets(self):
+        datasets = deepcopy(DOOM_DATASETS)
 
-    def get_datasets(self):
-        return [
-            super().DatasetInfo(
-                lambda: self.policy,
-                partial(make_env, "sa/ArnoldDefendCenter-v0"),
-                size=100,  # TODO
-                max_steps_per_traj=1000,  # TODO
-            )
-        ]
+        rounds = 100
+
+        for d in datasets:
+            d.size = math.ceil(d.size / rounds)
+            d.policy_maker = lambda: self.policy
+
+        datasets = rounds * list(datasets)
+
+        return datasets
