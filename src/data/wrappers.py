@@ -82,8 +82,6 @@ class WithRewardWrapper(gym.Wrapper):
         self.old_state = None
 
     def step(self, action: ActType):
-        # TODO: Extract this into its own wrapper:
-        action = len(self.unwrapped.button_map) - action - 1
         results = super().step(action)
 
         observations, reward, *rest = results
@@ -163,6 +161,7 @@ class VizdoomEnvFromGame(VizdoomEnv):
 
         self.game.set_window_visible(False)
 
+        # Make at least one game variable available
         self.game.add_available_game_variable(vzd.GameVariable.HEALTH)
 
         self.max_buttons_pressed = max_buttons_pressed
@@ -192,7 +191,7 @@ class VizdoomEnvFromGame(VizdoomEnv):
         self.labels = self.game.is_labels_buffer_enabled()
         self.automap = self.game.is_automap_buffer_enabled()
 
-        # parse buttons defined by config file
+        # parse buttons defined
         self._VizdoomEnv__parse_available_buttons()
 
         # check for valid max_buttons_pressed

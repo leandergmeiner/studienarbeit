@@ -13,6 +13,7 @@ from pretrained.arnold.src.doom.game import (
 from pretrained.arnold.src.doom.labels import get_label_type_id, parse_labels_mapping
 from pretrained.common import dotdict
 from src.data.wrappers import VizdoomEnvFromGame
+from src.data.common import DOOM_BUTTONS
 
 # Needs to be redefined, since the executed file changes and therefore the path determination
 # of Arnold is wrong.
@@ -175,6 +176,8 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
     ):
         params = dotdict(kwargs)
         self.params = params
+        
+        available_buttons = self.params.available_buttons or DOOM_BUTTONS
 
         self.params.n_bots = self.params.n_bots or 0
         self.params.respawn_protect = self.params.respawn_protect or False
@@ -187,6 +190,10 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
             arnold_game.init_bots_health(100)
 
         game = arnold_game.game
+        
+        game.close()
+        
+        game.set_available_buttons(available_buttons)
 
         super().__init__(game, frame_skip, max_buttons_pressed, render_mode)
 
@@ -199,7 +206,7 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
             )
         else:
             self.game.send_game_command("removebots")
-            for i in range(self.params.n_bots):
+            for _ in range(self.params.n_bots):
                 self.game.send_game_command("addbot")
 
         return obs, info
@@ -207,6 +214,7 @@ class VizdoomArnoldEnv(VizdoomEnvFromGame):
     def _get_arnold_game(self, scenario_type: str, params: dotdict) -> ArnoldGame:
         from pretrained.arnold.src.doom.actions import ActionBuilder
 
+        # Should produce the same buttons as available_buttons
         action_builder = ActionBuilder(params)
 
         if scenario_type in ("defend_the_center", "health_gathering"):
@@ -259,6 +267,7 @@ gym.register(
         map_id=1,
     ),
 )
+
 gym.register(
     "arnold/HealthGathering-v0",
     VizdoomArnoldEnv,

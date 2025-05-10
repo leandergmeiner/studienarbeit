@@ -6,9 +6,10 @@ from transformers import AutoModel, GPT2Config, GPT2Model
 from src.data.doom import DoomOfflineDataModule
 from src.modules import DTActor, LightningSequenceActor, PatchEmbedding, VideoDT
 
-# from wrappers import AggregateWrapper, VectorAggregateWrapper, Trajectory
-
 # %%
+# This line is needed for some reason to prevent misalignement issues.
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+
 # FIXME: We can not save even 10,000 steps with pixel information, therefore we generate the
 # data on the fly. 10,000 steps would take more than 4.3 GB of memory.
 
@@ -23,7 +24,7 @@ max_patches = 2048
 num_spatial_heads = base_vit.encoder.layer[0].attention.attention.num_attention_heads
 num_temporal_heads = 8
 
-max_seq_len = 512 * 3
+max_seq_len = 64 * 3
 
 num_actions = 9 # TODO
 
@@ -70,7 +71,6 @@ model = LightningSequenceActor(
 # %%
 
 # TODO: Maybe use DeiTImageProcesseor
-
 
 def main():
     trainer = Trainer()

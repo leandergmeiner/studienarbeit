@@ -53,6 +53,11 @@ def default_observation_transform(
             in_keys_inv=["pixels", ("next", "pixels")],
         ),
         torchrl.envs.ExcludeTransform("labels", "labels_buffer", inverse=True),
+        torchrl.envs.DTypeCastTransform(
+            dtype_in=torch.int64,
+            dtype_out=torch.bool,
+            in_keys_inv=["action"],
+        ),
     )
 
     if exclude_next_observation:
@@ -70,7 +75,7 @@ def default_observation_transform(
         torchrl.envs.ExcludeTransform("original", ("next", "original")),
         # TODO: Already apply this for .inv(...)
         torchrl.envs.DTypeCastTransform(
-            dtype_in=torch.int64,
+            dtype_in=torch.bool,
             dtype_out=torch.float,
             in_keys=["action"],
         ),

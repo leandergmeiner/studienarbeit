@@ -125,7 +125,7 @@ ENV_TRANSFORMS = {
 # TODO: GymEnv: categorical_action_encoding = True
 def make_env(
     env,
-    num_workers: int = 1,
+    num_workers: int = 0,
     transforms: list | None = None,
     max_seen_rtg: float | None = None,
     **kwargs,

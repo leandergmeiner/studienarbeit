@@ -88,7 +88,7 @@ class LightningSequenceActor(L.LightningModule):
         model: torch.nn.Module,
         criterion: torch.nn.Module,
         inference_context: int = 512,
-        lr=0.01,
+        lr=0.001,
         metrics: dict[str, torch.nn.Module] | None = None,
         action_key="action",
         out_action_key="action2",
@@ -151,7 +151,6 @@ class LightningSequenceActor(L.LightningModule):
         labels = batch[self.labels_key]
         out = self.forward(batch)
         loss = self.criterion(out["logits"], labels)
-        
         return {"loss": loss}
 
     def on_predict_start(self):

@@ -1,24 +1,21 @@
 # %%
-from typing import Literal
-
 from logging import getLogger
 from pathlib import Path
+from typing import Literal
 
+import numpy as np
 import torch
+import vizdoom as vzd
+from einops import rearrange
 from tensordict import TensorDict
 
-from pretrained.common import dotdict
 from pretrained.arnold.src.args import finalize_args
-from pretrained.arnold.src.model import get_model_class
 from pretrained.arnold.src.doom.actions import create_action_set
-from pretrained.arnold.src.model.bucketed_embedding import BucketedEmbedding
 from pretrained.arnold.src.doom.labels import parse_labels_mapping
-
+from pretrained.arnold.src.model import get_model_class
+from pretrained.arnold.src.model.bucketed_embedding import BucketedEmbedding
+from pretrained.common import dotdict
 from src.data.env import DOOM_BUTTONS
-
-import vizdoom as vzd
-
-from einops import rearrange
 
 logger = getLogger()
 
@@ -68,7 +65,7 @@ class ArnoldAgent(torch.nn.Module):
             width=108,
             hist_size=4,
             # gpu_id=-1,  # We will move the model to the GPU ourselves
-            gpu_id=-1, # TODO FIXME
+            gpu_id=-1,  # TODO FIXME
             speed="off",
             crouch="off",
             use_continuous=False,
@@ -153,6 +150,11 @@ class ArnoldAgent(torch.nn.Module):
             doom_action.append(params.speed == "on")
             doom_action.append(params.crouch == "on")
             self.doom_actions.append(doom_action)
+
+        self.doom_actions = np.array(self.doom_actions)
+        # self.doom_actions = np.roll(
+        #     np.array(self.doom_actions)[..., ::-1], 1, axis=-1
+        # ).astype(int)
         self.n_actions = len(self.available_actions)
         params.n_actions = self.n_actions
 
@@ -194,9 +196,21 @@ class ArnoldAgent(torch.nn.Module):
         gamevariables[gamevariables < 0] = 0
         tensordict["gamevariables"] = gamevariables
 
+        def convert_action(action_id: int):
+            button_map = self.doom_actions[int(action_id)]
+            button_map = np.concat((button_map, [0]))
+            return button_map[::-1].astype(int)
+            if not button_map.any():
+                # Do nothing
+                return 0
+
+            converted_action_id = np.argwhere(button_map == 1).flat[0]
+            return self.doom_actions.shape[1] - converted_action_id
+
         # TODO: Solve this more elegantly using categorical actions specs in the env.
         actions = [
-            self.doom_actions[int(action_id)]
+            # self.doom_actions[int(action_id)]
+            convert_action(action_id)
             for action_id in self.next_action(tensordict)
         ]
         tensordict[self.action_key] = actions
