@@ -15,10 +15,6 @@ from pretrained.models import ArnoldAgent
 from src.data.env import make_env
 from src.data.streaming import GymnasiumStreamingDataset, LazyChainDataset
 
-BATCH_TRAJ_LEN = 64  # TODO 192 / 3
-NUM_WORKERS = 1  # TODO
-
-
 @dataclass
 class DatasetInfo:
     name: str
@@ -71,7 +67,7 @@ class StreamingDataModule(LightningDataModule, ABC):
         self.batch_size = batch_size
         self.batch_traj_len = batch_traj_len
         self.num_workers = num_workers
-        self.num_trajs = batch_size  # TODO
+        self.num_trajs = batch_size + 1  # TODO
 
         self.max_seen_rtgs = max_seen_rtgs or {}
 
@@ -123,7 +119,7 @@ class StreamingDataModule(LightningDataModule, ABC):
 
     def _dataloader(self, datasets: Iterable[IterableDataset]):
         return DataLoader(
-            LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x
+            LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x, num_workers=self.num_workers
         )
 
     def train_dataloader(self) -> DataLoader:

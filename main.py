@@ -26,7 +26,7 @@ num_temporal_heads = 8
 
 max_seq_len = 64 * 3
 
-num_actions = 9 # TODO
+num_actions = 10 # TODO
 
 temporal_transformer = GPT2Model(
     GPT2Config(

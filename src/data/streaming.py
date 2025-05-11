@@ -20,11 +20,13 @@ from torchrl.data.replay_buffers import (
     LazyTensorStorage,
     ReplayBuffer,
     Sampler,
-    SliceSamplerWithoutReplacement,
+    SliceSampler,
+    # SliceSamplerWithoutReplacement,
     TensorDictReplayBuffer,
     Writer,
 )
 from functools import partial
+from itertools import islice
 import numpy as np
 
 from einops import rearrange
@@ -175,10 +177,22 @@ class GymnasiumStreamingDataset(
         storage = storage_maker(
             self.storage_size, ndim=2 if self.num_workers is not None else 1
         )
-        sampler = SliceSamplerWithoutReplacement(
+        # sampler = SliceSamplerWithoutReplacement(
+        #     # end_key=("next", "done"),
+        #     traj_key=("collector", "traj_ids"),
+        #     truncated_key=None,
+        #     slice_len=batch_traj_len,
+        #     strict_length=False,
+        #     compile=True,
+        #     use_gpu=True,
+        # )
+        # TODO: SliceSamplerWithoutReplacement seems to not work correctly
+        # It only samples a slice once from a trajectory, instead of multiple
+        # non-equal slices from the same trajectory.
+        sampler = SliceSampler(
             traj_key=("collector", "traj_ids"),
-            truncated_key=None,
-            slice_len=batch_traj_len,
+            # end_key=("next", "done"),
+            num_slices=batch_size,
             strict_length=False,
             compile=True,
             use_gpu=True,
@@ -220,6 +234,7 @@ class GymnasiumStreamingDataset(
             self.extend(next(collect_iterator))
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
             data_iterator = map(split_trajectories, data_iterator)
+            data_iterator = islice(data_iterator, self.max_traj_len)
 
             for td in data_iterator:
                 # [:-1] -> Exclude the time dimension from the #trajectories calculation.

@@ -91,7 +91,7 @@ class LightningSequenceActor(L.LightningModule):
         lr=0.001,
         metrics: dict[str, torch.nn.Module] | None = None,
         action_key="action",
-        out_action_key="action2",
+        out_action_key="action",
         observation_key="observation",
         rtg_key="return_to_go",
         labels_key="labels",
@@ -148,6 +148,7 @@ class LightningSequenceActor(L.LightningModule):
         return out
 
     def training_step(self, batch: TensorDict):
+        # FIXME: Use (collector, mask) for gradient computation
         labels = batch[self.labels_key]
         out = self.forward(batch)
         loss = self.criterion(out["logits"], labels)
