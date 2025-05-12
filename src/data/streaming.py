@@ -1,15 +1,17 @@
-# %%
 import shutil
 import warnings
 from dataclasses import dataclass
+from functools import partial
+from itertools import islice
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkdtemp
 from typing import Callable, Iterable, Iterator, TypeVar
 
+import numpy as np
 import torch
 import torchrl
+from einops import rearrange
 from tensordict import PersistentTensorDict, TensorDict
-from torchrl.envs import EnvCreator
 from torchrl.collectors import DataCollectorBase
 from torchrl.collectors.utils import split_trajectories
 from torchrl.data.datasets import BaseDatasetExperienceReplay
@@ -25,11 +27,7 @@ from torchrl.data.replay_buffers import (
     TensorDictReplayBuffer,
     Writer,
 )
-from functools import partial
-from itertools import islice
-import numpy as np
-
-from einops import rearrange
+from torchrl.envs import EnvCreator
 
 
 def default_observation_transform(
@@ -161,6 +159,7 @@ class GymnasiumStreamingDataset(
 
         storage_size = num_trajs * max_traj_len
 
+        self.batch_traj_len = batch_traj_len
         self.size = size
         self.collector_out_key = collector_out_key
 
@@ -172,12 +171,14 @@ class GymnasiumStreamingDataset(
         self.max_traj_len = max_traj_len
 
         self.reward_key = reward_key
-        
+
         # TODO: Env Batch Size
         storage = storage_maker(
             # FIXME:
             # num_trajs, ndim=1
-            self.storage_size, ndim=3 if self.num_workers else 2
+            # self.storage_size, ndim=1
+            self.storage_size,
+            ndim=1,
         )
         # sampler = SliceSamplerWithoutReplacement(
         #     # end_key=("next", "done"),
@@ -193,10 +194,11 @@ class GymnasiumStreamingDataset(
         # non-equal slices from the same trajectory.
         sampler = SliceSampler(
             # FIXME
-            traj_key=("collector", "traj_ids"),
-            # end_key=("next", "done"),
-            num_slices=batch_size,
+            # traj_key=("collector", "traj_ids"),
+            end_key=("next", "done"),
+            slice_len=batch_traj_len,
             strict_length=False,
+            cache_values=True,
             compile=True,
             use_gpu=True,
         )
@@ -232,16 +234,19 @@ class GymnasiumStreamingDataset(
 
         collect_iterator: Iterator[TensorDict] = collector.iterator()
 
-        num_current_trajs = 0
-        while num_current_trajs < self.size:
-            self.extend(next(collect_iterator))
+        num_current_steps = 0
+        while num_current_steps < self.size:
+            td = next(collect_iterator)
+            td = td.flatten(0, 1)
+            self.extend(td)
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
-            data_iterator = map(split_trajectories, data_iterator)
-            data_iterator = islice(data_iterator, self.max_traj_len)
+            data_iterator = islice(data_iterator, self.max_traj_len // 16)  # TODO
 
             for td in data_iterator:
-                # [:-1] -> Exclude the time dimension from the #trajectories calculation.
-                num_current_trajs += td.batch_size[:-1].numel()
+                td = split_trajectories(td)
+
+                # [:-1] -> Exclude the time dimension from the num of trajectories calculation.
+                num_current_steps += td.batch_size.numel()
 
                 # Update max seen reward
                 self._max_seen_rtg = max(
@@ -250,7 +255,7 @@ class GymnasiumStreamingDataset(
 
                 yield td
 
-                if num_current_trajs > self.size:
+                if num_current_steps > self.size:
                     break
 
         collector.shutdown()
@@ -259,19 +264,25 @@ class GymnasiumStreamingDataset(
     def max_seen_rtg(self) -> np.float64:
         return self._max_seen_rtg
 
+    def __len__(self) -> int:
+        return self.size
+
 
 T = TypeVar("T")
 
 
 class LazyChainDataset(torch.utils.data.IterableDataset):
-    def __init__(self, datasets: Iterable[torch.utils.data.Dataset[T]]):
+    def __init__(self, make_datasets: Callable[[], Iterable]):
         super().__init__()
-        self.datasets = datasets
-
+        self.make_datasets = make_datasets
+        
     def __iter__(self):
-        for d in self.datasets:
+        for d in self.make_datasets():
             yield from d
-
+            
+    # def __len__(self):
+    #     s = sum(len(d) for d in self.make_datasets())
+    #     return s
 
 @dataclass
 class DataGenSpec:
@@ -371,6 +382,3 @@ class OfflineGymnasiumDataset(BaseDatasetExperienceReplay):
     @property
     def default_specs(self) -> Iterable[DataGenSpec]:
         raise NotImplementedError
-
-
-# %%

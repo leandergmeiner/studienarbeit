@@ -154,14 +154,11 @@ class LightningSequenceActor(L.LightningModule):
         loss = self.criterion(out["logits"], labels)
         return {"loss": loss}
 
-    def on_predict_start(self):
-        self.used_actor = self.inference_actor
-        
     def on_train_start(self):
         self.used_actor = self.actor
         
     def on_train_end(self):
-        self.used_actor = None
+        self.used_actor = self.inference_actor
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
