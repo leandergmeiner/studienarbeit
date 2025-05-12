@@ -172,10 +172,12 @@ class GymnasiumStreamingDataset(
         self.max_traj_len = max_traj_len
 
         self.reward_key = reward_key
-
+        
         # TODO: Env Batch Size
         storage = storage_maker(
-            self.storage_size, ndim=2 if self.num_workers is not None else 1
+            # FIXME:
+            # num_trajs, ndim=1
+            self.storage_size, ndim=3 if self.num_workers else 2
         )
         # sampler = SliceSamplerWithoutReplacement(
         #     # end_key=("next", "done"),
@@ -190,6 +192,7 @@ class GymnasiumStreamingDataset(
         # It only samples a slice once from a trajectory, instead of multiple
         # non-equal slices from the same trajectory.
         sampler = SliceSampler(
+            # FIXME
             traj_key=("collector", "traj_ids"),
             # end_key=("next", "done"),
             num_slices=batch_size,
@@ -307,7 +310,6 @@ class OfflineGymnasiumDataset(BaseDatasetExperienceReplay):
         self.frames_per_batch = frames_per_batch
         self.specs = specs or self.default_specs
         self.root_dir = Path(root)
-        print(self.root_dir)
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
         if not self._is_generated:

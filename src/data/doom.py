@@ -33,14 +33,14 @@ DOOM_DATASETS = [
         policy_maker=partial(ArnoldAgent, "defend_the_center"),
         create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
         size=1_000_000,  # TODO
-        max_steps_per_traj=500,  # TODO
+        max_steps_per_traj=300,  # TODO
     ),
     DatasetInfo(
         name="health_gathering",
         policy_maker=partial(ArnoldAgent, "health_gathering"),
         create_env_fn=partial(make_env, "sa/ArnoldHealthGathering-v0"),
         size=1_000_000,
-        max_steps_per_traj=500,  # TODO
+        max_steps_per_traj=300,  # TODO
     ),
     DatasetInfo(
         name="shotgun",
@@ -67,7 +67,7 @@ class StreamingDataModule(LightningDataModule, ABC):
         self.batch_size = batch_size
         self.batch_traj_len = batch_traj_len
         self.num_workers = num_workers
-        self.num_trajs = batch_size + 1  # TODO
+        self.num_trajs = batch_size
 
         self.max_seen_rtgs = max_seen_rtgs or {}
 
@@ -119,7 +119,7 @@ class StreamingDataModule(LightningDataModule, ABC):
 
     def _dataloader(self, datasets: Iterable[IterableDataset]):
         return DataLoader(
-            LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x, num_workers=self.num_workers
+            LazyChainDataset(datasets), batch_size=None, collate_fn=lambda x: x
         )
 
     def train_dataloader(self) -> DataLoader:

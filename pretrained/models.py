@@ -198,7 +198,7 @@ class ArnoldAgent(torch.nn.Module):
 
         def convert_action(action_id: int):
             button_map = self.doom_actions[int(action_id)]
-            button_map = np.concat((button_map, [0]))
+            button_map = np.concatenate((button_map, [0]))
             return button_map[::-1].astype(int)
             if not button_map.any():
                 # Do nothing

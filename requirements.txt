@@ -19,3 +19,4 @@ transformers==4.51.3
 vizdoom==1.2.4
 wheel==0.45.1
 tensordict==0.7.2
+numpy==2.2.5
