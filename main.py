@@ -73,8 +73,8 @@ model = LightningSequenceActor(
 # TODO: Maybe use DeiTImageProcesseor
 
 def main():
-    trainer = Trainer(max_epochs=-1, log_every_n_steps=20)
-    trainer.fit(model, datamodule=DoomOfflineDataModule(rounds=1, batch_size=2))
+    trainer = Trainer(max_epochs=-1, log_every_n_steps=5)
+    trainer.fit(model, datamodule=DoomOfflineDataModule(batch_size=2))
 
 
 if __name__ == "__main__":

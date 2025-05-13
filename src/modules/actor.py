@@ -1,5 +1,6 @@
 import lightning as L
 import torch
+from torch.nn import ModuleDict
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import TensorDictModule, dispatch
 from typing import Optional
@@ -10,6 +11,7 @@ from torchrl.modules import (
     ProbabilisticActor,
 )
 from tensordict.nn.probabilistic import InteractionType
+
 
 class DTActor(torch.nn.Module):
     def __init__(self, model: TrajectoryModel, hidden_dim: int, action_dim: int):
@@ -113,7 +115,7 @@ class LightningSequenceActor(L.LightningModule):
             in_keys=[self.observation_key, self.action_key, self.rtg_key],
             out_keys=["logits"],
         )
-        
+
         self.actor = ProbabilisticActor(
             model,
             in_keys=["logits"],
@@ -124,7 +126,9 @@ class LightningSequenceActor(L.LightningModule):
             default_interaction_type=InteractionType.RANDOM,
         )
 
-        self.inference_actor = DTInferenceWrapper(self.actor, inference_context=inference_context)
+        self.inference_actor = DTInferenceWrapper(
+            self.actor, inference_context=inference_context
+        )
 
         self.inference_actor.set_tensor_keys(
             observation=self.observation_key,
@@ -134,7 +138,7 @@ class LightningSequenceActor(L.LightningModule):
         )
 
         self.criterion = criterion
-        self.metrics = metrics or {}
+        self.metrics = ModuleDict(metrics) or ModuleDict()
         self.used_actor = None
 
     @dispatch
@@ -151,17 +155,26 @@ class LightningSequenceActor(L.LightningModule):
         # FIXME: Use (collector, mask) for gradient computation
         labels = batch[self.labels_key]
         out = self.forward(batch)
-        loss = self.criterion(out["logits"], labels)
+
+        loss: torch.Tensor = self.criterion(out["logits"], labels)
+        self.log("loss", loss, prog_bar=True)
+
+        metrics = self._calculate_metrics(out["logits"], labels)
+        self.log_dict(metrics)
+
         return {"loss": loss}
 
     def on_train_start(self):
         self.used_actor = self.actor
-        
+
     def on_train_end(self):
         self.used_actor = self.inference_actor
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
+
+    def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
+        return {key: metric(prediction, label) for key, metric in self.metrics.items()}
 
     @property
     def device(self):

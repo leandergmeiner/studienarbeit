@@ -15,18 +15,18 @@ from tensordict import PersistentTensorDict, TensorDict
 from torchrl.collectors import DataCollectorBase
 from torchrl.collectors.utils import split_trajectories
 from torchrl.data.datasets import BaseDatasetExperienceReplay
-from torchrl.data.replay_buffers import (
+from torchrl.data import (
     ImmutableDatasetWriter,
     LazyMemmapStorage,
     LazyStackStorage,
     LazyTensorStorage,
     ReplayBuffer,
-    Sampler,
     SliceSampler,
     # SliceSamplerWithoutReplacement,
     TensorDictReplayBuffer,
     Writer,
 )
+from torchrl.data.replay_buffers import Sampler
 from torchrl.envs import EnvCreator
 
 
@@ -220,7 +220,7 @@ class GymnasiumStreamingDataset(
         )
 
         self._max_seen_rtg = max_seen_rtg or np.finfo(np.float64).min
-
+        
     def __iter__(self) -> Iterator[TensorDict]:
         collector: DataCollectorBase = self.collector_maker(
             self.create_env_fn,
