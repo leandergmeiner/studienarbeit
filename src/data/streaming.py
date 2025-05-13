@@ -240,7 +240,7 @@ class GymnasiumStreamingDataset(
             td = td.flatten(0, 1)
             self.extend(td)
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
-            data_iterator = islice(data_iterator, self.max_traj_len // 16)  # TODO
+            data_iterator = islice(data_iterator, self.max_traj_len // 4)  # TODO
 
             for td in data_iterator:
                 td = split_trajectories(td)

@@ -155,11 +155,17 @@ class LightningSequenceActor(L.LightningModule):
         # FIXME: Use (collector, mask) for gradient computation
         labels = batch[self.labels_key]
         out = self.forward(batch)
+        logits = out["logits"]
+        
+        if ("collector", "mask") in batch:
+            mask = batch[("collector", "mask")]
+            logits = logits[mask]
+            labels = labels[mask]
 
-        loss: torch.Tensor = self.criterion(out["logits"], labels)
+        loss: torch.Tensor = self.criterion(logits, labels)
         self.log("loss", loss, prog_bar=True)
 
-        metrics = self._calculate_metrics(out["logits"], labels)
+        metrics = self._calculate_metrics(logits, labels)
         self.log_dict(metrics)
 
         return {"loss": loss}

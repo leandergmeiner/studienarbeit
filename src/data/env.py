@@ -156,7 +156,8 @@ def make_env(
     )
 
     if num_workers:
-        return torchrl.envs.ParallelEnv(num_workers, env_creator)
+        return torchrl.envs.SerialEnv(num_workers, env_creator)
+        # return torchrl.envs.ParallelEnv(1, env_creator, num_threads=num_workers)
     else:
         # This is only here for testing
         return torchrl.envs.SerialEnv(1, env_creator)
