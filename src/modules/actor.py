@@ -18,6 +18,8 @@ class DTActor(torch.nn.Module):
         super().__init__()
         self.model = model
         self.action_layer = torch.nn.Linear(hidden_dim, action_dim)
+        self.ln = torch.nn.LayerNorm(hidden_dim)
+        
 
         # TODO: Is this kind of initialisation necessary?
         self.action_layer.apply(lambda x: torch.nn.init.orthogonal_(x.weight.data))
@@ -33,6 +35,7 @@ class DTActor(torch.nn.Module):
         hidden_state = self.model(
             observation, action, return_to_go, attention_mask=attention_mask
         )
+        hidden_state = self.ln(hidden_state)
         return self.action_layer(hidden_state)
 
 
@@ -177,7 +180,10 @@ class LightningSequenceActor(L.LightningModule):
         self.used_actor = self.inference_actor
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=(self.lr or self.learning_rate))
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        return {"optimizer": optimizer, "scheduler": scheduler}
+
 
     def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
         return {key: metric(prediction, label) for key, metric in self.metrics.items()}

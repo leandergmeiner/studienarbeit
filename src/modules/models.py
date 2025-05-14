@@ -23,7 +23,7 @@ class VideoDT(nn.Module):
         self.hidden_size = hidden_size
 
         self.patching = patching
-        
+
         # TODO: This is whack
         self.frame_skip = patching.depth
 
@@ -34,8 +34,8 @@ class VideoDT(nn.Module):
         self.embed_return = nn.LazyLinear(self.hidden_size)
         self.embed_action = nn.LazyLinear(self.hidden_size)
 
-        self.space_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
-        self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
+        # self.space_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
+        # self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
 
         self.dropout = dropout
 
@@ -53,10 +53,11 @@ class VideoDT(nn.Module):
         attention_mask: Tensor | None = None,
     ) -> Tensor:
         assert observation.shape[1] % self.frame_skip == 0
-        
+
+        # Reduces observations with frame_skip
         states = self.get_states(observation)
-        action = action[..., ::self.frame_skip, :]
-        return_to_go = return_to_go[..., ::self.frame_skip, :]
+        action = action[..., :: self.frame_skip, :]
+        return_to_go = return_to_go[..., :: self.frame_skip, :]
 
         b, t = states.shape[:2]
 
@@ -70,6 +71,7 @@ class VideoDT(nn.Module):
         # this makes the sequence look like (R_1, s_1, a_1, R_2, s_2, a_2, ...)
         # which works nice in an autoregressive sense since states predict actions
         stacked_inputs: Tensor = rearrange(embeddings, "e b n d -> b (n e) d")
+        stacked_inputs = self.embedding_ln(stacked_inputs)
 
         stacked_attention_mask = (
             repeat(
@@ -83,12 +85,10 @@ class VideoDT(nn.Module):
             else None
         )
 
-        stacked_inputs = self.embedding_ln(stacked_inputs)
-
         position_ids = repeat(
             torch.arange(t), "t -> b (t e)", b=b, e=len(embeddings)
         ).to(stacked_inputs.device)
-        
+
         outputs = self.temporal_transformer(
             inputs_embeds=stacked_inputs,
             position_ids=position_ids,
@@ -102,20 +102,23 @@ class VideoDT(nn.Module):
 
         # Take each aggregated state (index 1) to later predict the next action
         outputs = outputs[:, 1]
-    
+
         # Since we've "compressed" the actions by only taking every frame_skip-th action,
         # we reverse that action for gradient descent.
         return repeat(outputs, "b n d -> b (n r) d", r=self.frame_skip)
-    
+
     def get_states(self, observation: Tensor):
-        patches = self.patching(observation)        
+        patches = self.patching(observation)
         patches = self.dropout(patches)
 
-        states: Tensor = vmap(self.spatial_transformer)(patches)
+        states: Tensor = vmap(self.spatial_transformer, in_dims=-4)(
+            patches, resolution=observation.shape[-2:]
+        )
 
         if isinstance(states, Mapping):
             states = states["last_hidden_state"]
 
-        states = states[..., 0, :] # b;t;embedding_dim
-        
+        # Get [CLS] token of the spatial encoder
+        states = states[..., 0, :]  # b;t;embedding_dim
+
         return states

@@ -155,12 +155,15 @@ def make_env(
         _make_env, dict(env_name=env, transforms_list=transforms), **kwargs
     )
 
-    if num_workers:
-        return torchrl.envs.SerialEnv(num_workers, env_creator)
-        # return torchrl.envs.ParallelEnv(1, env_creator, num_threads=num_workers)
-    else:
-        # This is only here for testing
-        return torchrl.envs.SerialEnv(1, env_creator)
+
+    # if num_workers:
+    #     return torchrl.envs.SerialEnv(num_workers, env_creator)
+    #     # return torchrl.envs.ParallelEnv(1, env_creator, num_threads=num_workers)
+    # else:
+    #     # This is only here for testing
+
+    # FIXME
+    return torchrl.envs.SerialEnv(1, env_creator)
 
 
 # %%

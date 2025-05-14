@@ -2,8 +2,8 @@
 from logging import getLogger
 from pathlib import Path
 from typing import Literal
+import warnings
 
-import numpy as np
 import torch
 import vizdoom as vzd
 from einops import rearrange
@@ -43,6 +43,10 @@ class ArnoldAgent(torch.nn.Module):
         super().__init__()
 
         model_path = model_path or MODEL_PATHS[scenario]
+        
+        if batch_size <= 0:
+            warnings.warn(f"Invalid batch size {batch_size}, setting it to 1")
+            batch_size = 1
 
         # Network initialization and optional reloading
 
@@ -151,7 +155,7 @@ class ArnoldAgent(torch.nn.Module):
             doom_action.append(params.crouch == "on")
             self.doom_actions.append(doom_action)
 
-        self.doom_actions = np.array(self.doom_actions)
+        self.doom_actions = torch.tensor(self.doom_actions).to(torch.int)
         # self.doom_actions = np.roll(
         #     np.array(self.doom_actions)[..., ::-1], 1, axis=-1
         # ).astype(int)
@@ -196,23 +200,14 @@ class ArnoldAgent(torch.nn.Module):
         gamevariables[gamevariables < 0] = 0
         tensordict["gamevariables"] = gamevariables
 
-        def convert_action(action_id: int):
-            button_map = self.doom_actions[int(action_id)]
-            button_map = np.concatenate((button_map, [0]))
-            return button_map[::-1].astype(int)
-            if not button_map.any():
-                # Do nothing
-                return 0
-
-            converted_action_id = np.argwhere(button_map == 1).flat[0]
-            return self.doom_actions.shape[1] - converted_action_id
+        def convert_action(action_id: torch.Tensor):
+            button_map = self.doom_actions[action_id]
+            zeros = torch.zeros_like(button_map[..., :, :1])
+            button_map = torch.cat((button_map, zeros), dim=-1)
+            return button_map.flip(dims=(-1,))
 
         # TODO: Solve this more elegantly using categorical actions specs in the env.
-        actions = [
-            # self.doom_actions[int(action_id)]
-            convert_action(action_id)
-            for action_id in self.next_action(tensordict)
-        ]
+        actions = convert_action(self.next_action(tensordict))
         tensordict[self.action_key] = actions
         tensordict["gamevariables"] = old_gamevariables
         return tensordict

@@ -12,8 +12,6 @@ import torch
 import torchrl
 from einops import rearrange
 from tensordict import PersistentTensorDict, TensorDict
-from torchrl.collectors import DataCollectorBase
-from torchrl.collectors.utils import split_trajectories
 from torchrl.data.datasets import BaseDatasetExperienceReplay
 from torchrl.data import (
     ImmutableDatasetWriter,
@@ -28,6 +26,8 @@ from torchrl.data import (
 )
 from torchrl.data.replay_buffers import Sampler
 from torchrl.envs import EnvCreator
+from torchrl.collectors import SyncDataCollector
+
 
 
 def default_observation_transform(
@@ -135,14 +135,13 @@ class GymnasiumStreamingDataset(
         num_trajs: int,
         policy: Callable,
         create_env_fn: Callable | EnvCreator,
-        collector_maker: Callable,
         collector_out_key: str = "action",
         num_workers: int | None = None,
-        storage_maker: Callable = LazyTensorStorage,
         max_seen_rtg: float | None = None,
         make_transform: Callable = default_observation_transform,
         make_transform_kwargs: dict = dict(),
         reward_key=("next", "reward"),
+        compilable: bool = True,
         **kwargs,
     ):
         if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
@@ -160,10 +159,10 @@ class GymnasiumStreamingDataset(
         storage_size = num_trajs * max_traj_len
 
         self.batch_traj_len = batch_traj_len
+        self.num_slices = batch_size
         self.size = size
         self.collector_out_key = collector_out_key
 
-        self.collector_maker = collector_maker
         self.create_env_fn = partial(create_env_fn, max_seen_rtg=max_seen_rtg)
         self.num_workers = num_workers
         self.policy = policy
@@ -171,15 +170,18 @@ class GymnasiumStreamingDataset(
         self.max_traj_len = max_traj_len
 
         self.reward_key = reward_key
+        
+        self.compilable = compilable
 
-        # TODO: Env Batch Size
-        storage = storage_maker(
+        storage = LazyTensorStorage(
             # FIXME:
             # num_trajs, ndim=1
             # self.storage_size, ndim=1
             self.storage_size,
             ndim=1,
+            compilable=self.compilable,
         )
+        
         # sampler = SliceSamplerWithoutReplacement(
         #     # end_key=("next", "done"),
         #     traj_key=("collector", "traj_ids"),
@@ -195,11 +197,11 @@ class GymnasiumStreamingDataset(
         sampler = SliceSampler(
             # FIXME
             # traj_key=("collector", "traj_ids"),
-            end_key=("next", "done"),
+            end_key=("next", "done"), # TODO
             slice_len=batch_traj_len,
-            strict_length=False,
-            cache_values=True,
-            compile=True,
+            # strict_length=False,
+            # cache_values=True,
+            compile=dict(fullgraph=True, mode="reduce-overhead" if self.compilable else False),
             use_gpu=True,
         )
 
@@ -216,22 +218,14 @@ class GymnasiumStreamingDataset(
             storage=storage,
             sampler=sampler,
             transform=transform,
+            # compilable=True,
             **kwargs,
         )
 
         self._max_seen_rtg = max_seen_rtg or np.finfo(np.float64).min
         
     def __iter__(self) -> Iterator[TensorDict]:
-        collector: DataCollectorBase = self.collector_maker(
-            self.create_env_fn,
-            create_env_kwargs=dict(num_workers=self.num_workers),
-            policy=self.policy,
-            total_frames=-1,
-            frames_per_batch=self.storage_size,
-            max_frames_per_traj=self.max_traj_len,
-            reset_when_done=True,
-        )
-
+        collector = self.collector()
         collect_iterator: Iterator[TensorDict] = collector.iterator()
 
         num_current_steps = 0
@@ -240,13 +234,16 @@ class GymnasiumStreamingDataset(
             td = td.flatten(0, 1)
             self.extend(td)
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
-            data_iterator = islice(data_iterator, self.max_traj_len // 4)  # TODO
+            data_iterator: Iterator[TensorDict] = islice(data_iterator, self.max_traj_len // 4)  # TODO
 
             for td in data_iterator:
-                td = split_trajectories(td)
+                td = td.reshape(self.num_slices, -1)
+                
+                # if td.batch_size[:2] != (self._batch_size, self.batch_traj_len):
+                #     td = td.view((self._batch_size, self.batch_traj_len), *td.batch_size[2:])
 
                 # [:-1] -> Exclude the time dimension from the num of trajectories calculation.
-                num_current_steps += td.batch_size.numel()
+                num_current_steps += td.batch_size[1:].numel() # TODO?
 
                 # Update max seen reward
                 self._max_seen_rtg = max(
@@ -259,13 +256,29 @@ class GymnasiumStreamingDataset(
                     break
 
         collector.shutdown()
+        
+    def collector(self):
+        return SyncDataCollector(
+            self.create_env_fn,
+            create_env_kwargs=dict(num_workers=self.num_workers),
+            policy=self.policy,
+            total_frames=-1,
+            frames_per_batch=self.storage_size,
+            max_frames_per_traj=self.max_traj_len,
+            reset_when_done=True,
+            split_trajs=True,
+            # We fill the replay buffer with one batch completely
+            # therefore we can always reuse the same tensordict
+            return_same_td=True,
+            compile_policy=self.compilable,
+        )
 
     @property
     def max_seen_rtg(self) -> np.float64:
         return self._max_seen_rtg
 
     def __len__(self) -> int:
-        return self.size
+        return self.size // self._batch_size
 
 
 T = TypeVar("T")

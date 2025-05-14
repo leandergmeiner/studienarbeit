@@ -6,6 +6,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import Tensor, nn
 
+
 class PatchEmbedding(nn.Module):
     def __init__(
         self,
@@ -13,7 +14,8 @@ class PatchEmbedding(nn.Module):
         depth: int,
         num_patches: int,
         method: Literal["center"] | Literal["uniform"] = "center",
-        additional_tokens: bool = True,
+        additional_cls_token: bool = True,
+        additional_distillation_token: bool = True,
     ):
         super().__init__()
 
@@ -23,7 +25,7 @@ class PatchEmbedding(nn.Module):
             warnings.warn(
                 f"{method=} is used and depth is even, therefore a center can not be determined.\n Using {depth=}"
             )
-            
+
         self.depth = depth
 
         conv = _conv2d_to_conv3d(base, depth, depth_stride=depth, method=method)
@@ -32,27 +34,39 @@ class PatchEmbedding(nn.Module):
             Rearrange("b t c h w -> b c t h w"),
             conv,
             Rearrange("b c t h w -> b t (h w) c"),
+            nn.Linear(conv.out_channels, conv.out_channels)
         )
-        
+
         self.states_cls_token = nn.Parameter(torch.zeros(1, conv.out_channels))
         self.states_distillation_token = nn.Parameter(torch.zeros(1, conv.out_channels))
-        
-        self.additional_tokens = additional_tokens
-        num_additional_tokens = 2 if additional_tokens else 0
-        self.states_position_embeddings = nn.Parameter(torch.zeros(1, num_patches + num_additional_tokens, conv.out_channels))
 
+        self.additional_cls_token = additional_cls_token
+        self.additional_distillation_token = additional_distillation_token
+        num_additional_tokens = int(additional_cls_token) + int(
+            additional_distillation_token
+        )
+        self.states_position_embeddings = nn.Parameter(
+            torch.zeros(1, num_patches + num_additional_tokens, conv.out_channels)
+        )
 
     def forward(self, x: Tensor) -> Tensor:
         embeddings: Tensor = self.patch_embedding(x)
-        b,t = embeddings.shape[:2]
+        b, t = embeddings.shape[:2]
 
-        if self.additional_tokens:
+        tokens = [embeddings]
+
+        if self.additional_cls_token:
             cls_tokens = self.states_cls_token.expand(b, t, -1, -1)
+            tokens.insert(0, cls_tokens)
+
+        if self.additional_distillation_token:
             distillation_tokens = self.states_distillation_token.expand(b, t, -1, -1)
-            embeddings = torch.cat((cls_tokens, distillation_tokens, embeddings), dim=-2)
-        
+            tokens.insert(1, distillation_tokens)
+
+        embeddings = torch.cat(tuple(tokens), dim=-2)
+
         embeddings += self.states_position_embeddings
-        return embeddings       
+        return embeddings
 
 
 # Incomplete conversion from conv2d to conv3d (e.g. missing padding)

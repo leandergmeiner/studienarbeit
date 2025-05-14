@@ -35,6 +35,12 @@ h5py = "^3.13.0"
 levdoom = "^1.0.1"
 av = "^14.3.0"
 gym = "^0.26.2"
+tensorboard = "^2.19.0"
+bitsandbytes = "^0.45.5"
+accelerate = "^1.6.0"
+optimum = {extras = ["onnxruntime-gpu"], version = "^1.25.0"}
+onnxruntime = "^1.22.0"
+onnx = "^1.18.0"
 
 
 [build-system]
