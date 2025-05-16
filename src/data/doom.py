@@ -1,8 +1,6 @@
-import math
-from abc import abstractmethod, ABC
 from copy import deepcopy
 from functools import partial
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal, Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,7 +18,7 @@ import random
 class DatasetInfo:
     name: str
     create_env_fn: Callable
-    size: int
+    max_steps: int
     max_steps_per_traj: int
     policy_maker: torch.nn.Module | None = None
     target_return_scaling_factor: float = 1.5
@@ -33,7 +31,7 @@ _DOOM_DATASETS = [
         name="defend_the_center",
         policy_maker=partial(ArnoldAgent, "defend_the_center"),
         create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
-        size=1_000_000,
+        max_steps=1_000_000,
         max_steps_per_traj=500,  # TODO
     ),
     # DatasetInfo(
@@ -53,40 +51,58 @@ _DOOM_DATASETS = [
     # ),
 ]
 _NUM_ACTIONS = 10
+_FRAME_SKIP = 4 # TODO: This number is not enforced
 
 
-class StreamingDataModule(LightningDataModule, ABC):
+class DoomStreamingDataModule(LightningDataModule):
     NUM_ACTIONS = _NUM_ACTIONS
+    FRAME_SKIP = _FRAME_SKIP
 
     def __init__(
         self,
         *,
+        policy: Callable | None = None,
         batch_size: int | None = None,
         batch_traj_len=64,
         num_workers=0,
         max_seen_rtgs: dict[str, np.float64] | None = None,
+        pin_memory=torch.cuda.is_available(),
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["policy"])
 
         self._batch_size = batch_size
         self.batch_traj_len = batch_traj_len
         self.num_workers = num_workers
         self.num_trajs = batch_size
+        self.policy = policy
 
         self.max_seen_rtgs = max_seen_rtgs or {}
+
+        self.pin_memory = pin_memory
 
         # Needed for state loading
         self._start_index = 0
         self._dataset_start_index = 0
 
-    def _train_dataset_iterator(self) -> Iterator[IterableDataset]:
-        datasets = list(self.datasets)
+    def setup(self, stage: Literal["offline", "online"]):
+        self.stage = stage
+        datasets = deepcopy(_DOOM_DATASETS)
+        for d in datasets:
+            if stage == "offline":
+                # TODO: This is whack and only specific to Arnold Models
+                d.policy_maker = partial(
+                    d.policy_maker, batch_size=self.num_workers or 1
+                )
+            elif stage == "online":
+                d.policy_maker = lambda: self.policy
+
+        self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets))
+
+    def _dataset_iterator(
+        self, datasets: Iterable[DatasetInfo]
+    ) -> Iterator[IterableDataset]:
         random.shuffle(datasets)
-
-        # In the second run
-        # print(datasets)
-
         for dataset_info in datasets:
             max_seen_rtg = self.max_seen_rtgs.get(dataset_info.name)
             if max_seen_rtg is not None:
@@ -96,11 +112,13 @@ class StreamingDataModule(LightningDataModule, ABC):
             create_env_fn = partial(create_env_fn, num_workers=self.num_workers)
 
             # _dataset_start_index is not 0 if we loaded from a state dict
-            size = dataset_info.size - self._dataset_start_index
-
-            policy = dataset_info.policy_maker()
+            size = dataset_info.max_steps - self._dataset_start_index
 
             torch._dynamo.config.capture_scalar_outputs = True
+            policy = dataset_info.policy_maker()
+            policy = torch.compile(policy)
+            torch._dynamo.config.capture_scalar_outputs = False
+
             dataset = GymnasiumStreamingDataset(
                 size=size,
                 batch_size=self.batch_size,
@@ -117,9 +135,6 @@ class StreamingDataModule(LightningDataModule, ABC):
                 ),  # TODO: This is whack
                 compilable=True,
             )
-            torch._dynamo.config.capture_scalar_outputs = False
-
-            self.current_dataset = dataset
 
             yield dataset
 
@@ -127,27 +142,20 @@ class StreamingDataModule(LightningDataModule, ABC):
 
             self.max_seen_rtgs[dataset_info.name] = dataset.max_seen_rtg
 
-    def _dataloader(self, make_datasets: Iterator[IterableDataset]):
-        self._start_index = 0
-
+    def _dataloader(self):
         return DataLoader(
-            LazyChainDataset(make_datasets),
+            self._dataset,
             collate_fn=torch.cat,
             in_order=False,
             num_workers=self.num_workers,
             persistent_workers=bool(self.num_workers),
+            pin_memory=self.pin_memory,
+            pin_memory_device="cuda:0" if self.pin_memory else None,
+            # prefetch_factor=4, TODO
         )
 
     def train_dataloader(self) -> DataLoader:
-        return self._dataloader(self._train_dataset_iterator)
-
-    @property
-    @abstractmethod
-    def _datasets(self) -> list[DatasetInfo]: ...
-
-    @property
-    def datasets(self) -> list[DatasetInfo]:
-        return self._datasets[self._start_index :]
+        return self._dataloader()
 
     @property
     def batch_size(self):
@@ -157,52 +165,10 @@ class StreamingDataModule(LightningDataModule, ABC):
         return {
             "index": self._start_index,
             "dataset_index": self._dataset_start_index,
+            "max_seen_rtgs": self.max_seen_rtgs,
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]):
         self._start_index = state_dict["index"]
         self._dataset_start_index = state_dict["dataset_index"]
-
-
-class DoomOfflineDataModule(StreamingDataModule):
-    def __init__(self, rounds=100, **kwargs):
-        super().__init__(**kwargs)
-        self.rounds = rounds
-
-    @property
-    def _datasets(self):
-        datasets = deepcopy(_DOOM_DATASETS)
-
-        for d in datasets:
-            d.size = math.ceil(d.size / self.rounds)
-
-            # TODO: This is whack and only specific to Arnold Models
-            d.policy_maker = partial(d.policy_maker, batch_size=self.num_workers or 1)
-
-        datasets = self.rounds * datasets
-
-        return datasets
-
-
-class DoomOnlineDataModule(StreamingDataModule):
-    def __init__(
-        self,
-        policy: Callable,
-        rounds=100,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.policy = policy
-        self.rounds = rounds
-
-    @property
-    def _datasets(self):
-        datasets = deepcopy(_DOOM_DATASETS)
-
-        for d in datasets:
-            d.size = math.ceil(d.size / self.rounds)
-            d.policy_maker = lambda: self.policy
-
-        datasets = self.rounds * list(datasets)
-
-        return datasets
+        self.max_seen_rtgs = state_dict["max_seen_rtgs"]

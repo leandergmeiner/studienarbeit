@@ -45,6 +45,7 @@ class PatchEmbedding(nn.Module):
         num_additional_tokens = int(additional_cls_token) + int(
             additional_distillation_token
         )
+        
         self.states_position_embeddings = nn.Parameter(
             torch.zeros(1, num_patches + num_additional_tokens, conv.out_channels)
         )
@@ -64,7 +65,6 @@ class PatchEmbedding(nn.Module):
             tokens.insert(1, distillation_tokens)
 
         embeddings = torch.cat(tuple(tokens), dim=-2)
-
         embeddings += self.states_position_embeddings
         return embeddings
 

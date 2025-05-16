@@ -29,7 +29,6 @@ from torchrl.envs import EnvCreator
 from torchrl.collectors import SyncDataCollector
 
 
-
 def default_observation_transform(
     collector_out_key: str,
     observation_shape: tuple[int, int] = (224, 224),
@@ -160,7 +159,7 @@ class GymnasiumStreamingDataset(
 
         self.batch_traj_len = batch_traj_len
         self.num_slices = batch_size
-        self.size = size
+        self.max_steps = size
         self.collector_out_key = collector_out_key
 
         self.create_env_fn = partial(create_env_fn, max_seen_rtg=max_seen_rtg)
@@ -170,7 +169,7 @@ class GymnasiumStreamingDataset(
         self.max_traj_len = max_traj_len
 
         self.reward_key = reward_key
-        
+
         self.compilable = compilable
 
         storage = LazyTensorStorage(
@@ -181,7 +180,7 @@ class GymnasiumStreamingDataset(
             ndim=1,
             compilable=self.compilable,
         )
-        
+
         # sampler = SliceSamplerWithoutReplacement(
         #     # end_key=("next", "done"),
         #     traj_key=("collector", "traj_ids"),
@@ -197,12 +196,14 @@ class GymnasiumStreamingDataset(
         sampler = SliceSampler(
             # FIXME
             # traj_key=("collector", "traj_ids"),
-            end_key=("next", "done"), # TODO
+            end_key=("next", "done"),  # TODO
             slice_len=batch_traj_len,
             # strict_length=False,
-            # cache_values=True,
-            compile=dict(fullgraph=True, mode="reduce-overhead" if self.compilable else False),
-            use_gpu=True,
+            cache_values=True,
+            compile=dict(fullgraph=True, mode="reduce-overhead")
+            if self.compilable
+            else False,
+            use_gpu=self.compilable,
         )
 
         transform = make_transform(
@@ -222,41 +223,43 @@ class GymnasiumStreamingDataset(
             **kwargs,
         )
 
-        self._max_seen_rtg = max_seen_rtg or np.finfo(np.float64).min
-        
+        self._max_seen_rtg = max_seen_rtg
+
     def __iter__(self) -> Iterator[TensorDict]:
         collector = self.collector()
         collect_iterator: Iterator[TensorDict] = collector.iterator()
 
-        num_current_steps = 0
-        while num_current_steps < self.size:
+        num_steps = 0
+        while num_steps < self.max_steps:
             td = next(collect_iterator)
             td = td.flatten(0, 1)
             self.extend(td)
             data_iterator = super(TensorDictReplayBuffer, self).__iter__()
-            data_iterator: Iterator[TensorDict] = islice(data_iterator, self.max_traj_len // 4)  # TODO
+            data_iterator: Iterator[TensorDict] = islice(
+                data_iterator, self.max_traj_len // 4
+            )  # TODO
 
             for td in data_iterator:
                 td = td.reshape(self.num_slices, -1)
-                
-                # if td.batch_size[:2] != (self._batch_size, self.batch_traj_len):
-                #     td = td.view((self._batch_size, self.batch_traj_len), *td.batch_size[2:])
 
                 # [:-1] -> Exclude the time dimension from the num of trajectories calculation.
-                num_current_steps += td.batch_size[1:].numel() # TODO?
+                num_steps += td.batch_size.numel()
 
                 # Update max seen reward
-                self._max_seen_rtg = max(
-                    self._max_seen_rtg, np.float64(td[self.reward_key].max())
-                )
+                if self._max_seen_rtg is not None:
+                    self._max_seen_rtg = max(
+                        self._max_seen_rtg, np.float64(td[self.reward_key].max())
+                    )
+                else:
+                    self._max_seen_rtg = np.float64(td[self.reward_key].max())
 
                 yield td
 
-                if num_current_steps > self.size:
+                if num_steps > self.max_steps:
                     break
 
         collector.shutdown()
-        
+
     def collector(self):
         return SyncDataCollector(
             self.create_env_fn,
@@ -274,11 +277,11 @@ class GymnasiumStreamingDataset(
         )
 
     @property
-    def max_seen_rtg(self) -> np.float64:
+    def max_seen_rtg(self) -> np.float64 | None:
         return self._max_seen_rtg
 
     def __len__(self) -> int:
-        return self.size // self._batch_size
+        return self.max_steps // (self.num_slices * self.batch_traj_len)
 
 
 T = TypeVar("T")
@@ -288,14 +291,15 @@ class LazyChainDataset(torch.utils.data.IterableDataset):
     def __init__(self, make_datasets: Callable[[], Iterable]):
         super().__init__()
         self.make_datasets = make_datasets
-        
+
     def __iter__(self):
         for d in self.make_datasets():
             yield from d
-            
-    # def __len__(self):
-    #     s = sum(len(d) for d in self.make_datasets())
-    #     return s
+
+    def __len__(self):
+        s = sum(len(d) for d in self.make_datasets())
+        return s
+
 
 @dataclass
 class DataGenSpec:

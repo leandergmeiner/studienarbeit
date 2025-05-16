@@ -5,44 +5,34 @@ from einops import rearrange, repeat
 from torch import Tensor, nn, vmap
 
 
+# TODO: Image Processor
+
+
 # The reason we don't use torchrl.modules.DecisionTransformer
 # is that it does not allow us to specifiy a custom transformer decoder backbone
 class VideoDT(nn.Module):
     def __init__(
         self,
         hidden_size: int,
-        patching: nn.Module,
-        spatial_transformer: nn.Module,
+        frame_skip: int,
+        spatial_encoder: nn.Module,
         temporal_transformer: nn.Module,
-        num_spatial_heads: int,
-        num_temporal_heads: int,
         dropout: nn.Module = nn.Identity(),
     ):
         super().__init__()
 
         self.hidden_size = hidden_size
-
-        self.patching = patching
-
-        # TODO: This is whack
-        self.frame_skip = patching.depth
-
-        self.spatial_transformer = spatial_transformer
+        self.frame_skip = frame_skip
+        self.spatial_encoder = spatial_encoder
         self.temporal_transformer = temporal_transformer
 
         self.embed_states = nn.LazyLinear(self.hidden_size)
         self.embed_return = nn.LazyLinear(self.hidden_size)
         self.embed_action = nn.LazyLinear(self.hidden_size)
 
-        # self.space_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
-        # self.temporal_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
-
         self.dropout = dropout
 
         self.embedding_ln = nn.LayerNorm(hidden_size)
-
-        self.num_spatial_heads = num_spatial_heads
-        self.num_temporal_heads = num_temporal_heads
 
     def forward(
         self,
@@ -55,7 +45,14 @@ class VideoDT(nn.Module):
         assert observation.shape[1] % self.frame_skip == 0
 
         # Reduces observations with frame_skip
-        states = self.get_states(observation)
+        states: Tensor = self.spatial_encoder(observation)
+
+        if isinstance(states, Mapping):
+            states = states["last_hidden_state"]
+
+        # Get [CLS] token of the spatial encoder
+        states = states[..., 0, :]  # b;t;embedding_dim
+        
         action = action[..., :: self.frame_skip, :]
         return_to_go = return_to_go[..., :: self.frame_skip, :]
 
@@ -72,18 +69,21 @@ class VideoDT(nn.Module):
         # which works nice in an autoregressive sense since states predict actions
         stacked_inputs: Tensor = rearrange(embeddings, "e b n d -> b (n e) d")
         stacked_inputs = self.embedding_ln(stacked_inputs)
+        
+        stacked_inputs = self.dropout(stacked_inputs)
 
-        stacked_attention_mask = (
-            repeat(
-                attention_mask,
-                "s1 s2 -> b (s1 e1) (s2 e2)",
-                b=b,
-                e1=len(embeddings),
-                e2=len(embeddings),
+        if attention_mask is not None:
+            stacked_attention_mask = (
+                repeat(
+                    attention_mask,
+                    "s1 s2 -> b (s1 e1) (s2 e2)",
+                    b=b,
+                    e1=len(embeddings),
+                    e2=len(embeddings),
+                )
             )
-            if attention_mask is not None
-            else None
-        )
+        else:
+            stacked_attention_mask = None
 
         position_ids = repeat(
             torch.arange(t), "t -> b (t e)", b=b, e=len(embeddings)
@@ -111,9 +111,11 @@ class VideoDT(nn.Module):
         patches = self.patching(observation)
         patches = self.dropout(patches)
 
-        states: Tensor = vmap(self.spatial_transformer, in_dims=-4)(
-            patches, resolution=observation.shape[-2:]
-        )
+        # with torch.autocast(device_type='cuda', dtype=torch.float16):
+        # states: Tensor = vmap(self.spatial_transformer, in_dims=-4)(
+        #     patches, resolution=observation.shape[-2:]
+        # )
+        states: Tensor = vmap(self.spatial_encoder, in_dims=-4)(observation)
 
         if isinstance(states, Mapping):
             states = states["last_hidden_state"]

@@ -1,3 +1,6 @@
+from typing import Literal
+import warnings
+
 import lightning as L
 import torch
 from torch.nn import ModuleDict
@@ -11,6 +14,10 @@ from torchrl.modules import (
     ProbabilisticActor,
 )
 from tensordict.nn.probabilistic import InteractionType
+from torchmetrics.classification import MultilabelAccuracy, MultilabelAUROC
+from transformers import AutoModel, GPT2Config, GPT2Model
+
+from einops import rearrange
 
 
 class DTActor(torch.nn.Module):
@@ -19,7 +26,6 @@ class DTActor(torch.nn.Module):
         self.model = model
         self.action_layer = torch.nn.Linear(hidden_dim, action_dim)
         self.ln = torch.nn.LayerNorm(hidden_dim)
-        
 
         # TODO: Is this kind of initialisation necessary?
         self.action_layer.apply(lambda x: torch.nn.init.orthogonal_(x.weight.data))
@@ -87,14 +93,68 @@ class DTInferenceWrapper(torchrl.modules.DecisionTransformerInferenceWrapper):
         return tensordict
 
 
+class SpatialTransformerEncoderWrapper(torch.nn.Module):
+    def __init__(
+        self,
+        model_name_or_path: str,
+        frame_skip: int = 4,
+    ):
+        from src.modules.conv import PatchEmbedding
+
+        super().__init__()
+        model = AutoModel.from_pretrained(
+            model_name_or_path, attn_implementation="sdpa", add_pooling_layer=False
+        )
+
+        self.hidden_size = model.encoder.layer[0].layernorm_after.normalized_shape[0]
+        base_conv = model.embeddings.patch_embeddings.projection
+
+        self.patching = PatchEmbedding(
+            base_conv,
+            frame_skip,
+            num_patches=model.embeddings.patch_embeddings.num_patches,
+            method="uniform",
+        )
+
+        self.encoder = model.encoder
+
+    def forward(self, observations: torch.Tensor):
+        encoder = torch.vmap(self.encoder, in_dims=-4)
+        outputs = self.patching(observations)
+        return encoder(outputs)
+
+
+class SpatialCNNEncoderWrapper(torch.nn.Module):
+    def __init__(
+        self,
+        model_name_or_path: str,
+        output_dim: int = 192,
+    ):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(model_name_or_path)
+        self.linear = torch.nn.LazyLinear(output_dim)
+
+    def forward(self, observations: torch.Tensor):
+        observations = torch.stack(
+            [
+                self.encoder(obs)["last_hidden_state"]
+                for obs in observations.unbind(dim=-4)
+            ],
+            dim=-4,
+        )
+        observations = rearrange(observations, "... d w h -> ... (d w h)")
+        observations = self.linear(observations)
+        return rearrange(observations, "... d -> ... 1 d")
+
+
 class LightningSequenceActor(L.LightningModule):
     def __init__(
         self,
         model: torch.nn.Module,
         criterion: torch.nn.Module,
-        inference_context: int = 512,
+        num_actions: int,
+        inference_context: int = 64,
         lr=0.001,
-        metrics: dict[str, torch.nn.Module] | None = None,
         action_key="action",
         out_action_key="action",
         observation_key="observation",
@@ -141,7 +201,13 @@ class LightningSequenceActor(L.LightningModule):
         )
 
         self.criterion = criterion
-        self.metrics = ModuleDict(metrics) or ModuleDict()
+        self.metrics = ModuleDict(
+            {
+                "auroc": MultilabelAUROC(num_actions),
+                "accuracy": MultilabelAccuracy(num_actions),
+            }
+        )
+
         self.used_actor = None
 
     @dispatch
@@ -159,16 +225,16 @@ class LightningSequenceActor(L.LightningModule):
         labels = batch[self.labels_key]
         out = self.forward(batch)
         logits = out["logits"]
-        
+
         if ("collector", "mask") in batch:
             mask = batch[("collector", "mask")]
             logits = logits[mask]
             labels = labels[mask]
 
         loss: torch.Tensor = self.criterion(logits, labels)
-        self.log("loss", loss, prog_bar=True)
-
         metrics = self._calculate_metrics(logits, labels)
+        metrics.update(loss=loss)
+
         self.log_dict(metrics)
 
         return {"loss": loss}
@@ -180,12 +246,14 @@ class LightningSequenceActor(L.LightningModule):
         self.used_actor = self.inference_actor
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=(self.lr or self.learning_rate))
+        optimizer = torch.optim.AdamW(
+            self.parameters(), lr=(self.lr or self.learning_rate)
+        )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-        return {"optimizer": optimizer, "scheduler": scheduler}
-
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "loss"}
 
     def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
+        label = label.int()
         return {key: metric(prediction, label) for key, metric in self.metrics.items()}
 
     @property
@@ -203,4 +271,70 @@ class LightningSequenceActor(L.LightningModule):
                 {self.observation_key, self.action_key, self.rtg_key}
             ),
             key=str,
+        )
+
+    @classmethod
+    def default(
+        cls,
+        method: Literal["transformer", "cnn"] = "transformer",
+        frame_skip: int = 1,
+        num_actions: int = 10,
+        inference_context: int = 64,
+        **kwargs,
+    ) -> "LightningSequenceActor":
+        from src.modules.models import VideoDT
+
+        # TODO: Image Processor
+
+        if method == "transformer":
+            spatial_encoder = SpatialTransformerEncoderWrapper(
+                "facebook/deit-tiny-distilled-patch16-224", frame_skip
+            )
+            hidden_size = spatial_encoder.hidden_size
+        elif method == "cnn":
+            if frame_skip != 1:
+                warnings.warn(
+                    f"Frame skip is specified as {frame_skip} but {method=} does not use it."
+                )
+
+            # This size was chosen to have the model comparable to the transformer approach
+            hidden_size = 192
+            spatial_encoder = SpatialCNNEncoderWrapper(
+                "microsoft/resnet-50", hidden_size
+            )
+
+        spatial_encoder = spatial_encoder.train()
+
+        temporal_transformer = GPT2Model(
+            GPT2Config(
+                vocab_size=1,
+                n_embd=hidden_size,
+                n_positions=3 * inference_context,
+                n_inner=inference_context,
+                n_layer=32,
+                n_head=8,
+                attn_pdrop=0.1,
+                embd_pdrop=0.1,
+                resid_pdrop=0.1,
+                use_flash_attention_2=True,
+            )
+        )
+
+        transformer = DTActor(
+            VideoDT(
+                hidden_size=hidden_size,
+                # patching=patching,
+                frame_skip=frame_skip,
+                spatial_encoder=spatial_encoder,
+                temporal_transformer=temporal_transformer,
+            ),
+            hidden_dim=hidden_size,
+            action_dim=num_actions,
+        )
+
+        return cls(
+            transformer,
+            inference_context=inference_context,
+            num_actions=num_actions,
+            **kwargs,
         )

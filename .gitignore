@@ -166,3 +166,4 @@ _vizdoom.ini
 
 # PyTorch Lightning
 lightning_logs/
+logs/
