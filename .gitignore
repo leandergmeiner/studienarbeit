@@ -167,3 +167,5 @@ _vizdoom.ini
 # PyTorch Lightning
 lightning_logs/
 logs/
+video_dir/
+models/

@@ -12,6 +12,7 @@ import torchrl
 from src.modules.types import TrajectoryModel
 from torchrl.modules import (
     ProbabilisticActor,
+    DecisionTransformerInferenceWrapper
 )
 from tensordict.nn.probabilistic import InteractionType
 from torchmetrics.classification import MultilabelAccuracy, MultilabelAUROC
@@ -45,7 +46,7 @@ class DTActor(torch.nn.Module):
         return self.action_layer(hidden_state)
 
 
-class DTInferenceWrapper(torchrl.modules.DecisionTransformerInferenceWrapper):
+class DTInferenceWrapper(DecisionTransformerInferenceWrapper):
     def __init__(
         self,
         policy: TensorDictModule,
@@ -98,13 +99,22 @@ class SpatialTransformerEncoderWrapper(torch.nn.Module):
         self,
         model_name_or_path: str,
         frame_skip: int = 4,
+        resolution: tuple[int, int] | None = (224, 224),
     ):
         from src.modules.conv import PatchEmbedding
+        from inspect import getfullargspec
 
         super().__init__()
         model = AutoModel.from_pretrained(
             model_name_or_path, attn_implementation="sdpa", add_pooling_layer=False
         )
+
+        self.encoder = model.encoder
+
+        if "resolution" in getfullargspec(self.encoder.forward).args:
+            self.resolution = resolution
+        else:
+            self.resolution = None
 
         self.hidden_size = model.encoder.layer[0].layernorm_after.normalized_shape[0]
         base_conv = model.embeddings.patch_embeddings.projection
@@ -114,14 +124,16 @@ class SpatialTransformerEncoderWrapper(torch.nn.Module):
             frame_skip,
             num_patches=model.embeddings.patch_embeddings.num_patches,
             method="uniform",
+            additional_distillation_token=not self.resolution,
         )
 
-        self.encoder = model.encoder
-
     def forward(self, observations: torch.Tensor):
-        encoder = torch.vmap(self.encoder, in_dims=-4)
+        encoder = torch.vmap(self.encoder, in_dims=-4, randomness="different")
         outputs = self.patching(observations)
-        return encoder(outputs)
+        if self.resolution is not None:
+            return encoder(outputs, resolution=self.resolution)
+        else:
+            return encoder(outputs)
 
 
 class SpatialCNNEncoderWrapper(torch.nn.Module):
@@ -129,9 +141,10 @@ class SpatialCNNEncoderWrapper(torch.nn.Module):
         self,
         model_name_or_path: str,
         output_dim: int = 192,
+        encoder: torch.nn.Module | None = None,
     ):
         super().__init__()
-        self.encoder = AutoModel.from_pretrained(model_name_or_path)
+        self.encoder = encoder or AutoModel.from_pretrained(model_name_or_path)
         self.linear = torch.nn.LazyLinear(output_dim)
 
     def forward(self, observations: torch.Tensor):
@@ -150,8 +163,6 @@ class SpatialCNNEncoderWrapper(torch.nn.Module):
 class LightningSequenceActor(L.LightningModule):
     def __init__(
         self,
-        model: torch.nn.Module,
-        criterion: torch.nn.Module,
         num_actions: int,
         inference_context: int = 64,
         lr=0.001,
@@ -160,8 +171,12 @@ class LightningSequenceActor(L.LightningModule):
         observation_key="observation",
         rtg_key="return_to_go",
         labels_key="labels",
+        model: torch.nn.Module | None = None,
+        criterion: torch.nn.Module | None = None,
+        **kwargs,
     ):
         super().__init__()
+        self.save_hyperparameters(ignore=["model", "criterion"])
 
         self.action_key = action_key
         self.out_action_key = out_action_key
@@ -171,36 +186,37 @@ class LightningSequenceActor(L.LightningModule):
 
         self.lr = lr
 
-        self.transformer = model
-
-        model = TensorDictModule(
-            model,
-            in_keys=[self.observation_key, self.action_key, self.rtg_key],
-            out_keys=["logits"],
+        self.model = model or self.default_model(
+            num_actions=num_actions, inference_context=inference_context, **kwargs
         )
 
-        self.actor = ProbabilisticActor(
-            model,
+        self._actor = ProbabilisticActor(
+            TensorDictModule(
+                self.model,
+                in_keys=[self.observation_key, self.action_key, self.rtg_key],
+                out_keys=["logits"],
+            ),
             in_keys=["logits"],
             out_keys=[self.out_action_key],
             distribution_class=torch.distributions.OneHotCategorical,
+            # distribution_class=torchrl.modules.TanhDelta,
             # distribution_class=RelaxedBernoulli,
             # distribution_kwargs=dict(temperature=1.0), # TODO
             default_interaction_type=InteractionType.RANDOM,
         )
 
-        self.inference_actor = DTInferenceWrapper(
-            self.actor, inference_context=inference_context
+        self._inference_actor = DTInferenceWrapper(
+            self._actor, inference_context=inference_context
         )
 
-        self.inference_actor.set_tensor_keys(
+        self._inference_actor.set_tensor_keys(
             observation=self.observation_key,
             action=self.action_key,
             return_to_go=self.rtg_key,
             out_action=self.out_action_key,
         )
 
-        self.criterion = criterion
+        self.criterion = criterion or torch.nn.CrossEntropyLoss()
         self.metrics = ModuleDict(
             {
                 "auroc": MultilabelAUROC(num_actions),
@@ -208,7 +224,7 @@ class LightningSequenceActor(L.LightningModule):
             }
         )
 
-        self.used_actor = None
+        self._used_actor = None
 
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
@@ -217,7 +233,7 @@ class LightningSequenceActor(L.LightningModule):
         if tensordict.batch_size:
             tensordict.batch_size = tensordict.batch_size[:-1]
 
-        out: TensorDict = self.used_actor(tensordict)
+        out: TensorDict = self._used_actor(tensordict)
         return out
 
     def training_step(self, batch: TensorDict):
@@ -233,17 +249,20 @@ class LightningSequenceActor(L.LightningModule):
 
         loss: torch.Tensor = self.criterion(logits, labels)
         metrics = self._calculate_metrics(logits, labels)
-        metrics.update(loss=loss)
 
+        self.log("loss", loss, prog_bar=True)
         self.log_dict(metrics)
 
         return {"loss": loss}
 
     def on_train_start(self):
-        self.used_actor = self.actor
+        self._used_actor = self._actor
 
     def on_train_end(self):
-        self.used_actor = self.inference_actor
+        self._used_actor = self._inference_actor
+        
+    def on_predict_start(self):
+        self._used_actor = self._inference_actor
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -256,9 +275,13 @@ class LightningSequenceActor(L.LightningModule):
         label = label.int()
         return {key: metric(prediction, label) for key, metric in self.metrics.items()}
 
+    def state_dict(self):
+        state_dict = super().state_dict()
+        return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
+
     @property
     def device(self):
-        return self.actor.device
+        return self._actor.device
 
     @property
     def in_keys(self):
@@ -267,38 +290,42 @@ class LightningSequenceActor(L.LightningModule):
     @property
     def out_keys(self):
         return sorted(
-            set(self.actor.out_keys).union(
+            set(self._actor.out_keys).union(
                 {self.observation_key, self.action_key, self.rtg_key}
             ),
             key=str,
         )
 
     @classmethod
-    def default(
+    def default_model(
         cls,
         method: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         num_actions: int = 10,
         inference_context: int = 64,
-        **kwargs,
-    ) -> "LightningSequenceActor":
+        resolution: tuple[int, int] = (224, 224),
+    ) -> DTActor:
         from src.modules.models import VideoDT
 
         # TODO: Image Processor
 
+        hidden_size = 256
+
         if method == "transformer":
             spatial_encoder = SpatialTransformerEncoderWrapper(
-                "facebook/deit-tiny-distilled-patch16-224", frame_skip
+                # "facebook/deit-small-distilled-patch16-224",
+                "microsoft/beit-base-patch16-224",
+                frame_skip,
+                resolution,
             )
-            hidden_size = spatial_encoder.hidden_size
         elif method == "cnn":
             if frame_skip != 1:
                 warnings.warn(
                     f"Frame skip is specified as {frame_skip} but {method=} does not use it."
                 )
+                frame_skip = 1
 
             # This size was chosen to have the model comparable to the transformer approach
-            hidden_size = 192
             spatial_encoder = SpatialCNNEncoderWrapper(
                 "microsoft/resnet-50", hidden_size
             )
@@ -310,8 +337,7 @@ class LightningSequenceActor(L.LightningModule):
                 vocab_size=1,
                 n_embd=hidden_size,
                 n_positions=3 * inference_context,
-                n_inner=inference_context,
-                n_layer=32,
+                n_layer=12,
                 n_head=8,
                 attn_pdrop=0.1,
                 embd_pdrop=0.1,
@@ -332,9 +358,4 @@ class LightningSequenceActor(L.LightningModule):
             action_dim=num_actions,
         )
 
-        return cls(
-            transformer,
-            inference_context=inference_context,
-            num_actions=num_actions,
-            **kwargs,
-        )
+        return transformer

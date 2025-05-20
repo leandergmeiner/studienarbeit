@@ -18,38 +18,39 @@ from src.modules import LightningSequenceActor
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 # torch.backends.cudnn.benchmark = True
 
+
 # TODO: Maybe use DeiTImageProcesseor
 def main():
-    method = "transformer"
-    
-    model = LightningSequenceActor.default(
+    method = "cnn"
+
+    model = LightningSequenceActor(
         method=method,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=64,
-        criterion=torch.nn.CrossEntropyLoss(),
         labels_key="target_action",
-        lr=0.05,
+        lr=0.005,
     )
 
-    batch_size = 64
-    max_batch_size_in_mem = 1
-    accumulate_grad_batches = batch_size // max_batch_size_in_mem
+    if method == "transformer":
+        accumulate_grad_batches = 16
+        max_batch_size_in_mem = 3
+    elif method == "cnn":
+        accumulate_grad_batches = 24
+        max_batch_size_in_mem = 2
 
     logger = TensorBoardLogger("logs/", f"dt-{method}", default_hp_metric=False)
     trainer = Trainer(
+        precision="transformer-engine-float16",  # If H100 is available
         max_epochs=-1,
         log_every_n_steps=1,
         accumulate_grad_batches=accumulate_grad_batches,
         logger=logger,
         callbacks=[
-            # TODO:
             ModelCheckpoint(
-                save_top_k=10,
-                monitor="global_step",
-                mode="max",
-                dirpath="models",
-                every_n_train_steps=100,  # Actually every batch_size // max_batch_size_in_mem iterations
+                save_last=True,
+                dirpath=f"models/{method}",
+                every_n_train_steps=10,  # Actually every batch_size // max_batch_size_in_mem iterations
             ),
             StochasticWeightAveraging(swa_lrs=1e-2),
         ],

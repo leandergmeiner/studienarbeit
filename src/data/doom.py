@@ -98,6 +98,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 d.policy_maker = lambda: self.policy
 
         self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets))
+        self.current_dataset = None
 
     def _dataset_iterator(
         self, datasets: Iterable[DatasetInfo]
@@ -115,6 +116,7 @@ class DoomStreamingDataModule(LightningDataModule):
             size = dataset_info.max_steps - self._dataset_start_index
 
             torch._dynamo.config.capture_scalar_outputs = True
+            # TODO: Make policy random somehow
             policy = dataset_info.policy_maker()
             policy = torch.compile(policy)
             torch._dynamo.config.capture_scalar_outputs = False
@@ -135,12 +137,15 @@ class DoomStreamingDataModule(LightningDataModule):
                 ),  # TODO: This is whack
                 compilable=True,
             )
+            
+            self.current_dataset = dataset
 
             yield dataset
 
             self._start_index += 1
 
             self.max_seen_rtgs[dataset_info.name] = dataset.max_seen_rtg
+            print(f"{self.max_seen_rtgs[dataset_info.name]=}")
 
     def _dataloader(self):
         return DataLoader(

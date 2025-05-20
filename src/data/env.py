@@ -2,8 +2,8 @@
 from functools import partial
 from typing import Callable, NamedTuple
 
-import torch
-import torchrl
+import torch 
+import torchrl.envs
 import vizdoom as vzd
 
 from src.data.common import DEFAULT_REWARD_FUNCS, DOOM_BUTTONS

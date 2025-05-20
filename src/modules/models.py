@@ -42,7 +42,7 @@ class VideoDT(nn.Module):
         *,
         attention_mask: Tensor | None = None,
     ) -> Tensor:
-        assert observation.shape[1] % self.frame_skip == 0
+        assert observation.shape[-4] % self.frame_skip == 0
 
         # Reduces observations with frame_skip
         states: Tensor = self.spatial_encoder(observation)

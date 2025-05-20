@@ -1,31 +1,18 @@
-import shutil
 import warnings
-from dataclasses import dataclass
 from functools import partial
 from itertools import islice
-from pathlib import Path
-from tempfile import TemporaryDirectory, mkdtemp
-from typing import Callable, Iterable, Iterator, TypeVar
+from typing import Callable, Iterable, Iterator
 
 import numpy as np
 import torch
-import torchrl
+import torchrl.envs
 from einops import rearrange
-from tensordict import PersistentTensorDict, TensorDict
-from torchrl.data.datasets import BaseDatasetExperienceReplay
+from tensordict import TensorDict
 from torchrl.data import (
-    ImmutableDatasetWriter,
-    LazyMemmapStorage,
-    LazyStackStorage,
     LazyTensorStorage,
-    ReplayBuffer,
     SliceSampler,
-    # SliceSamplerWithoutReplacement,
     TensorDictReplayBuffer,
-    Writer,
 )
-from torchrl.data.replay_buffers import Sampler
-from torchrl.envs import EnvCreator
 from torchrl.collectors import SyncDataCollector
 
 
@@ -133,7 +120,7 @@ class GymnasiumStreamingDataset(
         max_traj_len: int,
         num_trajs: int,
         policy: Callable,
-        create_env_fn: Callable | EnvCreator,
+        create_env_fn: Callable | torchrl.envs.EnvCreator,
         collector_out_key: str = "action",
         num_workers: int | None = None,
         max_seen_rtg: float | None = None,
@@ -284,9 +271,6 @@ class GymnasiumStreamingDataset(
         return self.max_steps // (self.num_slices * self.batch_traj_len)
 
 
-T = TypeVar("T")
-
-
 class LazyChainDataset(torch.utils.data.IterableDataset):
     def __init__(self, make_datasets: Callable[[], Iterable]):
         super().__init__()
@@ -299,103 +283,3 @@ class LazyChainDataset(torch.utils.data.IterableDataset):
     def __len__(self):
         s = sum(len(d) for d in self.make_datasets())
         return s
-
-
-@dataclass
-class DataGenSpec:
-    collector_maker: Callable
-    env_maker: Callable
-    name: Path
-    total_frames: int
-
-
-class OfflineGymnasiumDataset(BaseDatasetExperienceReplay):
-    def __init__(
-        self,
-        batch_size: int,
-        frames_per_batch: int,
-        *,
-        specs: Iterable[DataGenSpec] | None = None,
-        root: str | Path = "data2/",
-        sampler: Sampler | None = None,
-        writer: Writer | None = None,
-        collate_fn: Callable | None = None,
-        pin_memory: bool = False,
-        prefetch: int | None = None,
-        transform: torchrl.envs.Transform | None = None,  # noqa-F821
-    ):
-        super().__init__(
-            storage=LazyStackStorage(),  # We don't want to unnecessarily copy large tensors
-            sampler=sampler,
-            writer=writer or ImmutableDatasetWriter(),
-            collate_fn=collate_fn,
-            pin_memory=pin_memory,
-            prefetch=prefetch,
-            batch_size=batch_size,
-            transform=transform,
-        )
-
-        self.frames_per_batch = frames_per_batch
-        self.specs = specs or self.default_specs
-        self.root_dir = Path(root)
-        self.root_dir.mkdir(parents=True, exist_ok=True)
-
-        if not self._is_generated:
-            self.generate()
-
-        self._load()
-
-    def generate(self):
-        for spec in self.specs:
-            print("Generating", spec.name)
-            self._generate_from_spec(spec)
-            print("Done with")
-
-    def _load(self):
-        for path in self.data_paths:
-            # Using temporary storage as it should be quite large on Kaggle
-            temp_dir = mkdtemp()
-            td = PersistentTensorDict.from_h5(path)
-            td.memmap(temp_dir)
-            self.extend(td)
-            shutil.rmtree(temp_dir)
-
-    @property
-    def _is_generated(self) -> bool:
-        return all(path.exists() for path in self.data_paths)
-
-    def _generate_from_spec(self, spec: DataGenSpec):
-        # Using temporary storage as it should be quite large on Kaggle
-        with TemporaryDirectory() as temp_dir:
-            storage = LazyMemmapStorage(spec.total_frames, scratch_dir=temp_dir)
-            buffer = ReplayBuffer(storage=storage)
-            collector = spec.collector_maker(
-                spec.env_maker,
-                total_frames=spec.total_frames,
-                frames_per_batch=self.frames_per_batch,
-                reset_when_done=True,
-                split_trajs=True,
-                replay_buffer=buffer,
-            )
-
-            for data in collector:
-                buffer.extend(data)
-
-            buffer_content: TensorDict = buffer[:]
-            buffer_content.to_h5(self.data_path / f"{spec.name}.h5")
-
-    @property
-    def data_paths(self):
-        return [self.data_path / f"{spec.name}.h5" for spec in self.specs]
-
-    @property
-    def data_path(self):
-        return self.root_dir
-
-    @property
-    def data_path_root(self):
-        return self.root_dir
-
-    @property
-    def default_specs(self) -> Iterable[DataGenSpec]:
-        raise NotImplementedError
