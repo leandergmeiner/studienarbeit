@@ -20,17 +20,17 @@ torch.backends.cudnn.benchmark = True
 
 # TODO: Maybe use DeiTImageProcesseor
 def main():
-    method = "transformer"
+    model_type = "transformer"
     inference_context = 128
 
-    if method == "transformer":
+    if model_type == "transformer":
         accumulate_grad_batches = 16
         max_batch_size_in_mem = 3
-    elif method == "cnn":
+    elif model_type == "cnn":
         accumulate_grad_batches = 24
         max_batch_size_in_mem = 2
 
-    logger = TensorBoardLogger("logs/", f"dt-{method}", default_hp_metric=False)
+    logger = TensorBoardLogger("logs/", f"dt-{model_type}", default_hp_metric=False)
     trainer = Trainer(
         # precision="bf16-mixed",
         max_epochs=10,
@@ -40,7 +40,7 @@ def main():
         callbacks=[
             ModelCheckpoint(
                 save_last=True,
-                dirpath=f"models/{method}",
+                dirpath=f"models/{model_type}",
                 every_n_train_steps=10,  # Actually every batch_size // max_batch_size_in_mem iterations
             ),
             # StochasticWeightAveraging(swa_lrs=1e-2),
@@ -48,7 +48,7 @@ def main():
     )
 
     model = LightningSequenceActor(
-        method=method,
+        model_type=model_type,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,

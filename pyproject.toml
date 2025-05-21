@@ -41,6 +41,7 @@ accelerate = "^1.6.0"
 optimum = {extras = ["onnxruntime-gpu"], version = "^1.25.0"}
 onnxruntime = "^1.22.0"
 onnx = "^1.18.0"
+timm = "^1.0.15"
 
 
 [build-system]

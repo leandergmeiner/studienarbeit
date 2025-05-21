@@ -26,6 +26,7 @@ from src.modules.modules import (
     VideoDT,
 )
 from tensordict.nn import set_interaction_type
+from timm.optim.lamb import Lamb
 
 
 class LightningSequenceActor(L.LightningModule):
@@ -34,18 +35,21 @@ class LightningSequenceActor(L.LightningModule):
         num_actions: int,
         inference_context: int = 64,
         lr=0.001,
-        method: Literal["transformer", "cnn"] = "transformer",
+        model_type: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         warmup_step: int = 30,
+        init_temperature: float = 0.1,
         action_key="action",
         out_action_key="action",
         observation_key="observation",
         rtg_key="return_to_go",
         target_key="target_action",
         model: torch.nn.Module | None = None,
+        method: Literal["offline", "online"] = "offline",
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["model", "criterion"])
+        self.save_hyperparameters(ignore=["model"])
+        self.automatic_optimization = False
 
         self.action_key = action_key
         self.out_action_key = out_action_key
@@ -55,12 +59,18 @@ class LightningSequenceActor(L.LightningModule):
 
         self.warmup_steps = warmup_step
 
-        self.method = method
+        self.model_type = model_type
         self.frame_skip = frame_skip
         self.num_actions = num_actions
         self.inference_context = inference_context
 
+        self.method: Literal["offline", "online"] = method
+
         self.lr = lr
+
+        # Don't declare this as a Parameter, we perform gradient descent on it on its own
+        # and don't use the normal optimizer
+        self.log_temperature = torch.tensor(init_temperature, requires_grad=True).log()
 
         self.model = model
         self._training_actor = None
@@ -87,47 +97,82 @@ class LightningSequenceActor(L.LightningModule):
             tensordict.batch_size = tensordict.batch_size[:-1]
         return tensordict
 
-    @set_interaction_type(InteractionType.DETERMINISTIC)
     def training_step(self, batch: TensorDict):
+        opt, temp_opt = self.optimizers()
         # FIXME: Use (collector, mask) for gradient computation
         batch = self._reshape_batch(batch)
-        loss = self.loss_module(batch)
 
+        interaction_type = (
+            InteractionType.RANDOM
+            if self.method == "online"
+            else InteractionType.DETERMINISTIC
+        )
+
+        with set_interaction_type(interaction_type):
+            loss = self.loss_module(batch)
+
+        # GENERAL OPTIMIZER
+        loss_value = loss["loss_log_likelihood"]
+
+        opt.zero_grad()
+        self.manual_backward(loss_value)
+        opt.step()
+
+        # TEMPERATURE OPTIMIZER
+        entropy_delta: torch.Tensor = (
+            loss["entropy"] - self.inference_actor.target_entropy
+        )
+        temperature_loss = self.temperature * entropy_delta.detach()
+
+        temp_opt.zero_grad()
+        self.manual_backward(temperature_loss)
+        temp_opt.step()
+
+        # COMPUTE METRICS
         logits = loss[self.loss_module.tensor_keys.action_pred]
         labels = loss[self.loss_module.tensor_keys.action_target]
         metrics = self._calculate_metrics(logits, labels)
 
-        self.log("loss", loss, prog_bar=True)
+        self.log("loss", loss_value, prog_bar=True)
         self.log_dict(metrics)
-
-        return {"loss": loss}
 
     @set_interaction_type(InteractionType.RANDOM)
     def predict_step(self, batch: TensorDict):
         return self(batch)
 
+    def setup_method(self, method: Literal["offline", "online"]):
+        self.method = method
+
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
+        lr = self.lr or self.learning_rate
+
+        optimizer = Lamb(
             self.parameters(),
-            lr=(self.lr or self.learning_rate),
-            weight_decay=0.1,
+            lr=lr,
+            weight_decay=5e-5,
             betas=(0.9, 0.95),
         )
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda step: min(step / self.warmup_steps, 1.0)
         )
-        return {
+
+        optim_config = {
             "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
-            "monitor": "loss",
         }
+
+        log_temperature_optimizer = torch.optim.Adam(self.log_temperature, lr=lr)
+
+        log_temperature_optim_config = {"optimizer": log_temperature_optimizer}
+
+        return optim_config, log_temperature_optim_config
 
     def configure_model(self):
         if self.model is not None:
             return
 
         model = self._default_model(
-            self.method,
+            self.model_type,
             self.frame_skip,
             self.num_actions,
             self.inference_context,
@@ -223,9 +268,13 @@ class LightningSequenceActor(L.LightningModule):
     def inference_actor(self):
         return self._inference_actor
 
+    @property
+    def temperature(self):
+        return self.log_temperature.exp()
+
     def _default_model(
         self,
-        method: Literal["transformer", "cnn"] = "transformer",
+        model_type: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         num_actions: int = 10,
         inference_context: int = 64,
@@ -235,17 +284,17 @@ class LightningSequenceActor(L.LightningModule):
 
         hidden_size = 256
 
-        if method == "transformer":
+        if model_type == "transformer":
             spatial_encoder = SpatialTransformerEncoderWrapper(
                 # "facebook/deit-small-distilled-patch16-224",
                 "microsoft/beit-base-patch16-224",
                 frame_skip,
                 resolution,
             )
-        elif method == "cnn":
+        elif model_type == "cnn":
             if frame_skip != 1:
                 warnings.warn(
-                    f"Frame skip is specified as {frame_skip} but {method=} does not use it."
+                    f"Frame skip is specified as {frame_skip} but {model_type=} does not use it."
                 )
                 frame_skip = 1
 

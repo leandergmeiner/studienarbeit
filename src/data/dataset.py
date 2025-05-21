@@ -24,15 +24,13 @@ class DatasetInfo:
     target_return_scaling_factor: float = 1.5
 
 
-# TODO: Increase max_steps_per_traj
-
 _DOOM_DATASETS = [
     DatasetInfo(
         name="defend_the_center",
         policy_maker=partial(ArnoldAgent, "defend_the_center", random_action_chance=0.1),
         create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
         max_steps=1_000_000,
-        max_steps_per_traj=500,  # TODO
+        max_steps_per_traj=500,
     ),
     # DatasetInfo(
     #     name="health_gathering",
@@ -60,7 +58,7 @@ class DoomStreamingDataModule(LightningDataModule):
 
     def __init__(
         self,
-        generate_method: Literal["offline", "online"] = "offline",
+        method: Literal["offline", "online"] = "offline",
         policy: Callable | None = None,
         batch_size: int | None = None,
         batch_traj_len=64,
@@ -76,7 +74,7 @@ class DoomStreamingDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.num_trajs = batch_size
         self.policy = policy
-        self.generate_method: Literal["offline", "online"] = generate_method
+        self.method: Literal["offline", "online"] = method
         self.pin_memory = pin_memory
         self.max_seen_rtgs = max_seen_rtgs or {}
 
@@ -84,20 +82,20 @@ class DoomStreamingDataModule(LightningDataModule):
         self._start_index = 0
         self._dataset_start_index = 0
         
-    def setup_generation(self, method: Literal["offline", "online"]):
-        self.generate_method = method
+    def setup_method(self, method: Literal["offline", "online"]):
+        self.method = method
 
     def setup(self, stage):
         # self.stage = stage
         datasets = deepcopy(_DOOM_DATASETS)
         for d in datasets:
-            if self.generate_method == "offline":
+            if stage != "fit" or self.method == "online":
+                d.policy_maker = lambda: self.policy
+            else:
                 # TODO: This is whack and only specific to Arnold Models
                 d.policy_maker = partial(
                     d.policy_maker, batch_size=self.num_workers or 1
                 )
-            elif self.generate_method == "online":
-                d.policy_maker = lambda: self.policy
 
         self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets))
         self.current_dataset = None

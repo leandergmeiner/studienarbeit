@@ -76,7 +76,7 @@ model = LightningSequenceActor.load_from_checkpoint(
     f"models/{method}/last.ckpt",
     strict=False,
     model=LightningSequenceActor._default_model(
-        method=method,
+        model_type=method,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=64,
