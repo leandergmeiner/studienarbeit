@@ -107,7 +107,6 @@ def default_observation_transform(
     )
 
 
-# FIXME: Why is the batch size not constant when iterating???
 class GymnasiumStreamingDataset(
     TensorDictReplayBuffer, torch.utils.data.IterableDataset
 ):
@@ -135,10 +134,10 @@ class GymnasiumStreamingDataset(
                 "`storage` or `sampler` keyword was passed. Their values are ignored."
             )
 
-        if batch_size > num_trajs:
-            warnings.warn(
-                f"Can not utilize full batch size ({batch_size}), as only {num_trajs} are kept in memory at one time."
-            )
+        # if batch_size > num_trajs:
+        #     warnings.warn(
+        #         f"Can not utilize full batch size ({batch_size}), as only {num_trajs} are kept in memory at one time."
+        #     )
 
         assert max_traj_len >= batch_traj_len
 
@@ -181,9 +180,7 @@ class GymnasiumStreamingDataset(
         # It only samples a slice once from a trajectory, instead of multiple
         # non-equal slices from the same trajectory.
         sampler = SliceSampler(
-            # FIXME
-            # traj_key=("collector", "traj_ids"),
-            end_key=("next", "done"),  # TODO
+            end_key=("next", "done"),
             slice_len=batch_traj_len,
             # strict_length=False,
             cache_values=True,
@@ -273,14 +270,16 @@ class GymnasiumStreamingDataset(
 
 
 class LazyChainDataset(torch.utils.data.IterableDataset):
-    def __init__(self, make_datasets: Callable[[], Iterable]):
+    def __init__(self, make_datasets: Callable[[], Iterable], total_length: int | None = None):
         super().__init__()
         self.make_datasets = make_datasets
+        self._len = total_length
 
     def __iter__(self):
         for d in self.make_datasets():
             yield from d
 
-    # def __len__(self):
-    #     s = sum(len(d) for d in self.make_datasets())
-    #     return s
+    def __len__(self):
+        # s = sum(len(d) for d in self.make_datasets())
+        # return s
+        return self._len

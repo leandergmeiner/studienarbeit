@@ -27,7 +27,9 @@ class DatasetInfo:
 _DOOM_DATASETS = [
     DatasetInfo(
         name="defend_the_center",
-        policy_maker=partial(ArnoldAgent, "defend_the_center", random_action_chance=0.1),
+        policy_maker=partial(
+            ArnoldAgent, "defend_the_center", random_action_chance=0.1
+        ),
         create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
         max_steps=1_000_000,
         max_steps_per_traj=500,
@@ -61,8 +63,9 @@ class DoomStreamingDataModule(LightningDataModule):
         method: Literal["offline", "online"] = "offline",
         policy: Callable | None = None,
         batch_size: int | None = None,
-        batch_traj_len=64,
-        num_workers=0,
+        batch_traj_len: int = 64,
+        num_workers: int = 0,
+        num_trajs: int = 0,
         max_seen_rtgs: dict[str, np.float64] | None = None,
         pin_memory=torch.cuda.is_available(),
     ):
@@ -72,7 +75,7 @@ class DoomStreamingDataModule(LightningDataModule):
         self._batch_size = batch_size
         self.batch_traj_len = batch_traj_len
         self.num_workers = num_workers
-        self.num_trajs = batch_size
+        self.num_trajs = num_trajs or batch_size
         self.policy = policy
         self.method: Literal["offline", "online"] = method
         self.pin_memory = pin_memory
@@ -81,7 +84,7 @@ class DoomStreamingDataModule(LightningDataModule):
         # Needed for state loading
         self._start_index = 0
         self._dataset_start_index = 0
-        
+
     def setup_method(self, method: Literal["offline", "online"]):
         self.method = method
 
@@ -97,13 +100,18 @@ class DoomStreamingDataModule(LightningDataModule):
                     d.policy_maker, batch_size=self.num_workers or 1
                 )
 
-        self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets))
+        total_length = sum(
+            dataset.max_steps // (self.batch_size * self.batch_traj_len)
+            for dataset in datasets
+        )
+        self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets), total_length=total_length)
         self.current_dataset = None
 
     def _dataset_iterator(
         self, datasets: Iterable[DatasetInfo]
     ) -> Iterator[IterableDataset]:
         random.shuffle(datasets)
+
         for dataset_info in datasets:
             max_seen_rtg = self.max_seen_rtgs.get(dataset_info.name)
             if max_seen_rtg is not None:

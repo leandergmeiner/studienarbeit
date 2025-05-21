@@ -38,7 +38,7 @@ class LightningSequenceActor(L.LightningModule):
         model_type: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         warmup_step: int = 30,
-        init_temperature: float = 0.1,
+        init_temperature: float = 0.75,
         action_key="action",
         out_action_key="action",
         observation_key="observation",
@@ -46,7 +46,7 @@ class LightningSequenceActor(L.LightningModule):
         target_key="target_action",
         model: torch.nn.Module | None = None,
         method: Literal["offline", "online"] = "offline",
-        accumulate_grad_batches: int = 16,
+        accumulate_grad_batches: int = 1,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["model", "accumulate_grad_batches"])
@@ -69,6 +69,7 @@ class LightningSequenceActor(L.LightningModule):
         self.init_temperature = init_temperature
 
         self.accumulate_grad_batches = accumulate_grad_batches
+        print(f"{accumulate_grad_batches=}")
         self.lr = lr
 
         # Don't declare this as a Parameter, we perform gradient descent on it on its own
@@ -102,52 +103,43 @@ class LightningSequenceActor(L.LightningModule):
 
     def training_step(self, batch: TensorDict, batch_idx: int):
         opt, temp_opt = self.optimizers()
-
-        # UPDATE TEMPERATURE
-        x: SafeProbabilisticModule = self.training_actor[-1]
-        x.distribution_kwargs.update(temperature=self.temperature.detach())
-
         # FIXME: Use (collector, mask) for gradient computation
         batch = self._reshape_batch(batch)
 
-        interaction_type = (
-            InteractionType.RANDOM
-            if self.method == "online"
-            else InteractionType.DETERMINISTIC
-        )
+        interaction_type_mapping = {
+            "online": InteractionType.RANDOM,
+            "offline": InteractionType.DETERMINISTIC,
+        }
 
-        with set_interaction_type(interaction_type):
+        with set_interaction_type(interaction_type_mapping[self.method]):
             loss = self.loss_module(batch)
 
         # GENERAL OPTIMIZER
-        loss_value = loss["loss_log_likelihood"]
+        loss_value = loss["loss_entropy"]
         loss_value /= self.accumulate_grad_batches
-
-        opt.zero_grad()
-        self.manual_backward(loss_value)
-
-        # TEMPERATURE OPTIMIZER
-        entropy_delta: torch.Tensor = (
-            loss["entropy"] - self.loss_module.target_entropy
-        )
-        temperature_loss = self.temperature * entropy_delta.detach()
+        temperature_loss = loss["loss_alpha"]
         temperature_loss /= self.accumulate_grad_batches
 
-        temp_opt.zero_grad()
+        self.manual_backward(loss_value)
         self.manual_backward(temperature_loss)
 
         # OPTIMIZER STEP
         if batch_idx + 1 % self.accumulate_grad_batches == 0:
             opt.step()
             temp_opt.step()
+            opt.zero_grad()
+            temp_opt.zero_grad()
 
         # COMPUTE METRICS
-        logits = loss[self.loss_module.tensor_keys.action_pred]
-        labels = loss[self.loss_module.tensor_keys.action_target]
-        metrics = self._calculate_metrics(logits, labels)
+        # logits = loss[self.loss_module.tensor_keys.action_pred]
+        # labels = loss[self.loss_module.tensor_keys.action_target]
+        # metrics = self._calculate_metrics(logits, labels)
 
-        self.log("loss", loss_value, prog_bar=True)
-        self.log_dict(metrics)
+        self.log_dict(
+            {"loss_entropy": loss["loss_entropy"], "loss_alpha": loss["loss_alpha"]},
+            prog_bar=True,
+        )
+        # self.log_dict(metrics)
 
     @set_interaction_type(InteractionType.RANDOM)
     def predict_step(self, batch: TensorDict):
@@ -206,25 +198,6 @@ class LightningSequenceActor(L.LightningModule):
 
         self._configure_actors()
 
-    def set_tensor_keys(
-        self,
-        observation: str | None = None,
-        action: str | None = None,
-        return_to_go: str | None = None,
-        out_action: str | None = None,
-        labels: str | None = None,
-    ):
-        self.observation_key = observation or self.observation_key
-        self.action_key = action or self.action_key
-        self.rtg_key = return_to_go or self.rtg_key
-        self.out_action_key = out_action or self.out_action_key
-        self.target_key = labels or self.target_key
-        self._configure_actors()
-
-    def state_dict(self):
-        state_dict = super().state_dict()
-        return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
-
     def _configure_actors(self):
         actor = SafeProbabilisticTensorDictSequential(
             self.model,
@@ -254,10 +227,34 @@ class LightningSequenceActor(L.LightningModule):
         )
 
         target_entropy = -self.num_actions
-        loss_module = OnlineDTLoss(self.training_actor, target_entropy=target_entropy)
+
+        loss_module = OnlineDTLoss(
+            self.training_actor,
+            target_entropy=target_entropy,
+            alpha_init=self.init_temperature,
+        )
         loss_module.tensor_keys.action_pred = self.out_action_key
         loss_module.tensor_keys.action_target = self.target_key
         self.loss_module = loss_module
+
+    def set_tensor_keys(
+        self,
+        observation: str | None = None,
+        action: str | None = None,
+        return_to_go: str | None = None,
+        out_action: str | None = None,
+        labels: str | None = None,
+    ):
+        self.observation_key = observation or self.observation_key
+        self.action_key = action or self.action_key
+        self.rtg_key = return_to_go or self.rtg_key
+        self.out_action_key = out_action or self.out_action_key
+        self.target_key = labels or self.target_key
+        self._configure_actors()
+
+    def state_dict(self):
+        state_dict = super().state_dict()
+        return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
 
     def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
         label = label.int()

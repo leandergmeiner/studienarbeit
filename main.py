@@ -21,12 +21,11 @@ torch.backends.cudnn.benchmark = True
 # TODO: Maybe use DeiTImageProcesseor
 def main():
     model_type = "transformer"
-    inference_context = 128
-    inference_context = 16
+    inference_context = 64
 
     if model_type == "transformer":
         accumulate_grad_batches = 16
-        max_batch_size_in_mem = 3
+        max_batch_size_in_mem = 4
     elif model_type == "cnn":
         accumulate_grad_batches = 24
         max_batch_size_in_mem = 2
@@ -57,14 +56,19 @@ def main():
         accumulate_grad_batches=accumulate_grad_batches,
     )
     
+    model.setup_method("offline")
+    
     datamodule = DoomStreamingDataModule(
         "offline",
         policy=model,
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
-        num_workers=2,
+        num_workers=3,
+        num_trajs=2,
     )
     trainer.fit(model, datamodule=datamodule)
+    
+    # FIXME: Fix online training / online rollout
 
     # datamodule.setup_generation("offline")
     # trainer.fit(model, datamodule=datamodule)
