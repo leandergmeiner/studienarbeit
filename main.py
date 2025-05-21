@@ -2,10 +2,9 @@
 import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import StochasticWeightAveraging, ModelCheckpoint
-from lightning.pytorch.tuner import Tuner
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from src.data.doom import DoomStreamingDataModule
+from src.data.dataset import DoomStreamingDataModule
 from src.modules import LightningSequenceActor
 
 # %%
@@ -16,21 +15,13 @@ from src.modules import LightningSequenceActor
 
 # This line is needed for some reason to prevent misalignement issues.
 torch.backends.cuda.enable_mem_efficient_sdp(False)
-# torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = True
 
 
 # TODO: Maybe use DeiTImageProcesseor
 def main():
-    method = "cnn"
-
-    model = LightningSequenceActor(
-        method=method,
-        frame_skip=DoomStreamingDataModule.FRAME_SKIP,
-        num_actions=DoomStreamingDataModule.NUM_ACTIONS,
-        inference_context=64,
-        labels_key="target_action",
-        lr=0.005,
-    )
+    method = "transformer"
+    inference_context = 128
 
     if method == "transformer":
         accumulate_grad_batches = 16
@@ -41,8 +32,8 @@ def main():
 
     logger = TensorBoardLogger("logs/", f"dt-{method}", default_hp_metric=False)
     trainer = Trainer(
-        precision="transformer-engine-float16",  # If H100 is available
-        max_epochs=-1,
+        # precision="bf16-mixed",
+        max_epochs=10,
         log_every_n_steps=1,
         accumulate_grad_batches=accumulate_grad_batches,
         logger=logger,
@@ -52,21 +43,34 @@ def main():
                 dirpath=f"models/{method}",
                 every_n_train_steps=10,  # Actually every batch_size // max_batch_size_in_mem iterations
             ),
-            StochasticWeightAveraging(swa_lrs=1e-2),
+            # StochasticWeightAveraging(swa_lrs=1e-2),
         ],
     )
-    # tuner = Tuner(trainer)
 
-    datamodule = DoomStreamingDataModule(
-        policy=model,
-        batch_size=max_batch_size_in_mem,
-        num_workers=1,
+    model = LightningSequenceActor(
+        method=method,
+        frame_skip=DoomStreamingDataModule.FRAME_SKIP,
+        num_actions=DoomStreamingDataModule.NUM_ACTIONS,
+        inference_context=inference_context,
+        labels_key="target_action",
+        lr=0.005,
     )
-    datamodule.setup("offline")
-    trainer.fit(model, datamodule=datamodule)
 
-    # online_dm = DoomOnlineDataModule(model, max_seen_rtgs=offline_dm.max_seen_rtgs)
-    # trainer.fit(model, datamodule=online_dm)
+    model.configure_model()
+    
+    print(model)
+
+    # datamodule = DoomStreamingDataModule(
+    #     "offline",
+    #     policy=model,
+    #     batch_size=max_batch_size_in_mem,
+    #     batch_traj_len=inference_context,
+    #     num_workers=1,
+    # )
+    # trainer.fit(model, datamodule=datamodule)
+
+    # datamodule.setup_generation("offline")
+    # trainer.fit(model, datamodule=datamodule)
 
 
 if __name__ == "__main__":

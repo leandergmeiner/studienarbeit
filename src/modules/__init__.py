@@ -1,4 +1,4 @@
 from .types import TrajectoryModel
 from .conv import PatchEmbedding
-from .models import VideoDT
-from .actor import DTActor, LightningSequenceActor
+from .modules import VideoDT
+from .actor import OnlineDTActor, LightningSequenceActor

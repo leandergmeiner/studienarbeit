@@ -19,7 +19,7 @@ from torchrl.envs import (
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
 
-from src.data.doom import DoomStreamingDataModule
+from src.data.dataset import DoomStreamingDataModule
 from src.modules import LightningSequenceActor
 
 # %%
