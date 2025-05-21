@@ -75,7 +75,7 @@ env = TransformedEnv(
 model = LightningSequenceActor.load_from_checkpoint(
     f"models/{method}/last.ckpt",
     strict=False,
-    model=LightningSequenceActor.default_model(
+    model=LightningSequenceActor._default_model(
         method=method,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,

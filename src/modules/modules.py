@@ -59,7 +59,7 @@ class VideoDT(nn.Module):
 
         # Get [CLS] token of the spatial encoder
         states = states[..., 0, :]  # b;t;embedding_dim
-        
+
         action = action[..., :: self.frame_skip, :]
         return_to_go = return_to_go[..., :: self.frame_skip, :]
 
@@ -76,18 +76,16 @@ class VideoDT(nn.Module):
         # which works nice in an autoregressive sense since states predict actions
         stacked_inputs: Tensor = rearrange(embeddings, "e b n d -> b (n e) d")
         stacked_inputs = self.embedding_ln(stacked_inputs)
-        
+
         stacked_inputs = self.dropout(stacked_inputs)
 
         if attention_mask is not None:
-            stacked_attention_mask = (
-                repeat(
-                    attention_mask,
-                    "s1 s2 -> b (s1 e1) (s2 e2)",
-                    b=b,
-                    e1=len(embeddings),
-                    e2=len(embeddings),
-                )
+            stacked_attention_mask = repeat(
+                attention_mask,
+                "s1 s2 -> b (s1 e1) (s2 e2)",
+                b=b,
+                e1=len(embeddings),
+                e2=len(embeddings),
             )
         else:
             stacked_attention_mask = None
@@ -162,7 +160,18 @@ class OnlineDTActor(torch.nn.Module):
             observation, action, return_to_go, attention_mask=attention_mask
         )
         hidden_state = self.ln(hidden_state)
-        return self.action_layer(hidden_state)
+        mu = self.action_layer_mean(hidden_state)
+        log_std = self.action_layer_logstd(hidden_state)
+
+        log_std = torch.tanh(log_std)
+        # log_std is the output of tanh so it will be between [-1, 1]
+        # map it to be between [log_std_min, log_std_max]
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+            log_std + 1.0
+        )
+        std = log_std.exp()
+
+        return mu, std
 
 
 class DTInferenceWrapper(DecisionTransformerInferenceWrapper):
@@ -248,12 +257,17 @@ class SpatialTransformerEncoderWrapper(torch.nn.Module):
         )
 
     def forward(self, observations: torch.Tensor):
-        encoder = torch.vmap(self.encoder, in_dims=-4, randomness="different")
         outputs = self.patching(observations)
-        if self.resolution is not None:
-            return encoder(outputs, resolution=self.resolution)
-        else:
-            return encoder(outputs)
+        stack = []
+        for t in outputs.unbind(-4):
+            if self.resolution is not None:
+                output = self.encoder(t, resolution=self.resolution)
+            else:
+                output = self.encoder(t)
+
+            stack.append(output["last_hidden_state"])
+
+        return torch.stack(stack, dim=-4)
 
 
 class SpatialCNNEncoderWrapper(torch.nn.Module):
@@ -264,7 +278,7 @@ class SpatialCNNEncoderWrapper(torch.nn.Module):
         encoder: torch.nn.Module | None = None,
     ):
         from transformers import AutoModel
-        
+
         super().__init__()
         self.encoder = encoder or AutoModel.from_pretrained(model_name_or_path)
         self.linear = torch.nn.LazyLinear(output_dim)
@@ -280,5 +294,3 @@ class SpatialCNNEncoderWrapper(torch.nn.Module):
         observations = rearrange(observations, "... d w h -> ... (d w h)")
         observations = self.linear(observations)
         return rearrange(observations, "... d -> ... 1 d")
-
-

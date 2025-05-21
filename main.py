@@ -52,22 +52,18 @@ def main():
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,
-        labels_key="target_action",
-        lr=0.005,
+        target_key="target_action",
+        lr=5e-4,
     )
-
-    model.configure_model()
     
-    print(model)
-
-    # datamodule = DoomStreamingDataModule(
-    #     "offline",
-    #     policy=model,
-    #     batch_size=max_batch_size_in_mem,
-    #     batch_traj_len=inference_context,
-    #     num_workers=1,
-    # )
-    # trainer.fit(model, datamodule=datamodule)
+    datamodule = DoomStreamingDataModule(
+        "offline",
+        policy=model,
+        batch_size=max_batch_size_in_mem,
+        batch_traj_len=inference_context,
+        num_workers=1,
+    )
+    trainer.fit(model, datamodule=datamodule)
 
     # datamodule.setup_generation("offline")
     # trainer.fit(model, datamodule=datamodule)

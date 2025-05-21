@@ -8,9 +8,15 @@ from tensordict.nn import TensorDictModule, dispatch
 from tensordict.nn.probabilistic import InteractionType
 from torch.nn import ModuleDict
 from torchmetrics.classification import MultilabelAccuracy, MultilabelAUROC
-from torchrl.modules import ProbabilisticActor
 from transformers import GPT2Config, GPT2Model
-from torchao.float8 import Float8LinearConfig, convert_to_float8_training
+
+# from torchao.float8 import Float8LinearConfig, convert_to_float8_training
+# from torchrl.modules.tensordict_module import SafeSequential
+from torchrl.modules import (
+    SafeProbabilisticTensorDictSequential,
+    SafeProbabilisticModule,
+)
+from torchrl.objectives import OnlineDTLoss
 
 from src.modules.modules import (
     DTInferenceWrapper,
@@ -19,6 +25,7 @@ from src.modules.modules import (
     SpatialTransformerEncoderWrapper,
     VideoDT,
 )
+from tensordict.nn import set_interaction_type
 
 
 class LightningSequenceActor(L.LightningModule):
@@ -29,11 +36,12 @@ class LightningSequenceActor(L.LightningModule):
         lr=0.001,
         method: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
+        warmup_step: int = 30,
         action_key="action",
         out_action_key="action",
         observation_key="observation",
         rtg_key="return_to_go",
-        labels_key="labels",
+        target_key="target_action",
         model: torch.nn.Module | None = None,
     ):
         super().__init__()
@@ -43,7 +51,9 @@ class LightningSequenceActor(L.LightningModule):
         self.out_action_key = out_action_key
         self.observation_key = observation_key
         self.rtg_key = rtg_key
-        self.labels_key = labels_key
+        self.target_key = target_key
+
+        self.warmup_steps = warmup_step
 
         self.method = method
         self.frame_skip = frame_skip
@@ -53,10 +63,9 @@ class LightningSequenceActor(L.LightningModule):
         self.lr = lr
 
         self.model = model
-        self._actor = None
+        self._training_actor = None
         self._inference_actor = None
 
-        self.criterion = torch.nn.CrossEntropyLoss()
         self.metrics = ModuleDict(
             {
                 "auroc": MultilabelAUROC(num_actions),
@@ -64,30 +73,28 @@ class LightningSequenceActor(L.LightningModule):
             }
         )
 
-        self._used_actor = None
-
+    @set_interaction_type(InteractionType.RANDOM)
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
+        tensordict = self._reshape_batch(tensordict)
+        out: TensorDict = self.inference_actor(tensordict)
+        return out
+
+    def _reshape_batch(tensordict: TensorDict):
         # TODO: This is whack
         tensordict = tensordict.clone(False)
         if tensordict.batch_size:
             tensordict.batch_size = tensordict.batch_size[:-1]
+        return tensordict
 
-        out: TensorDict = self._used_actor(tensordict)
-        return out
-
+    @set_interaction_type(InteractionType.DETERMINISTIC)
     def training_step(self, batch: TensorDict):
         # FIXME: Use (collector, mask) for gradient computation
-        labels = batch[self.labels_key]
-        out = self.forward(batch)
-        logits = out["logits"]
+        batch = self._reshape_batch(batch)
+        loss = self.loss_module(batch)
 
-        if ("collector", "mask") in batch:
-            mask = batch[("collector", "mask")]
-            logits = logits[mask]
-            labels = labels[mask]
-
-        loss: torch.Tensor = self.criterion(logits, labels)
+        logits = loss[self.loss_module.tensor_keys.action_pred]
+        labels = loss[self.loss_module.tensor_keys.action_target]
         metrics = self._calculate_metrics(logits, labels)
 
         self.log("loss", loss, prog_bar=True)
@@ -95,69 +102,46 @@ class LightningSequenceActor(L.LightningModule):
 
         return {"loss": loss}
 
-    def on_train_start(self):
-        self._used_actor = self._actor
-
-    def on_train_end(self):
-        self._used_actor = self._inference_actor
-
-    def on_predict_start(self):
-        self._used_actor = self._inference_actor
+    @set_interaction_type(InteractionType.RANDOM)
+    def predict_step(self, batch: TensorDict):
+        return self(batch)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=(self.lr or self.learning_rate)
+            self.parameters(),
+            lr=(self.lr or self.learning_rate),
+            weight_decay=0.1,
+            betas=(0.9, 0.95),
         )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "loss"}
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lambda step: min(step / self.warmup_steps, 1.0)
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
+            "monitor": "loss",
+        }
 
     def configure_model(self):
         if self.model is not None:
-            return 
+            return
 
-        model = self.default_model(
+        model = self._default_model(
             self.method,
             self.frame_skip,
             self.num_actions,
             self.inference_context,
         )
-        
-        float8_config = Float8LinearConfig(
-            pad_inner_dim=True,
-        )
 
-        convert_to_float8_training(model, config=float8_config)
-        model = torch.compile(model)
-        
+        # Sadly supported on the GPUs available to us
+        # float8_config = Float8LinearConfig(
+        #     pad_inner_dim=True,
+        # )
+        # convert_to_float8_training(model, config=float8_config)
+        # model = torch.compile(model)
+
         self.model = model
         self._configure_actors()
-
-    def _configure_actors(self):
-        self._actor = ProbabilisticActor(
-            TensorDictModule(
-                self.model,
-                in_keys=[self.observation_key, self.action_key, self.rtg_key],
-                out_keys=["logits"],
-            ),
-            in_keys=["logits"],
-            out_keys=[self.out_action_key],
-            distribution_class=torch.distributions.OneHotCategorical,
-            # distribution_class=torchrl.modules.TanhDelta,
-            # distribution_class=RelaxedBernoulli,
-            # distribution_kwargs=dict(temperature=1.0), # TODO
-            default_interaction_type=InteractionType.RANDOM,
-        )
-
-        self._inference_actor = DTInferenceWrapper(
-            self._actor, inference_context=self.inference_context
-        )
-
-        self._inference_actor.set_tensor_keys(
-            observation=self.observation_key,
-            action=self.action_key,
-            return_to_go=self.rtg_key,
-            out_action=self.out_action_key,
-        )
 
     def set_tensor_keys(
         self,
@@ -171,20 +155,52 @@ class LightningSequenceActor(L.LightningModule):
         self.action_key = action or self.action_key
         self.rtg_key = return_to_go or self.rtg_key
         self.out_action_key = out_action or self.out_action_key
-        self.labels_key = labels or self.labels_key
+        self.target_key = labels or self.target_key
         self._configure_actors()
-
-    def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
-        label = label.int()
-        return {key: metric(prediction, label) for key, metric in self.metrics.items()}
 
     def state_dict(self):
         state_dict = super().state_dict()
         return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
 
+    def _configure_actors(self):
+        actor = SafeProbabilisticTensorDictSequential(
+            self.model,
+            SafeProbabilisticModule(
+                in_keys=["loc", "scale"],
+                out_keys=["logits"],
+                distribution_class=torch.distributions.Normal,
+                return_log_prob=True,
+            ),
+            SafeProbabilisticModule(
+                in_keys=["logits"],
+                out_keys=[self.out_action_key],
+                distribution_class=torch.distributions.OneHotCategorical,
+            ),
+        )
+
+        self._training_actor = actor
+        self._inference_actor = DTInferenceWrapper(
+            actor, inference_context=self.inference_context
+        )
+        self._inference_actor.set_tensor_keys(
+            observation=self.observation_key,
+            action=self.action_key,
+            return_to_go=self.rtg_key,
+            out_action=self.out_action_key,
+        )
+
+        loss_module = OnlineDTLoss(self.training_actor)
+        loss_module.tensor_keys.action_pred = self.out_action_key
+        loss_module.tensor_keys.action_target = self.target_key
+        self.loss_module = loss_module
+
+    def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
+        label = label.int()
+        return {key: metric(prediction, label) for key, metric in self.metrics.items()}
+
     @property
     def device(self):
-        return self._actor.device
+        return self._training_actor.device
 
     @property
     def in_keys(self):
@@ -193,21 +209,28 @@ class LightningSequenceActor(L.LightningModule):
     @property
     def out_keys(self):
         return sorted(
-            set(self._actor.out_keys).union(
+            set(self._training_actor.out_keys).union(
                 {self.observation_key, self.action_key, self.rtg_key}
             ),
             key=str,
         )
 
-    @classmethod
-    def default_model(
-        cls,
+    @property
+    def training_actor(self):
+        return self._training_actor
+
+    @property
+    def inference_actor(self):
+        return self._inference_actor
+
+    def _default_model(
+        self,
         method: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         num_actions: int = 10,
         inference_context: int = 64,
         resolution: tuple[int, int] = (224, 224),
-    ) -> OnlineDTActor:
+    ) -> TensorDictModule:
         # TODO: Image Processor
 
         hidden_size = 256
@@ -259,4 +282,8 @@ class LightningSequenceActor(L.LightningModule):
             action_dim=num_actions,
         )
 
-        return transformer
+        return TensorDictModule(
+            transformer,
+            in_keys=[self.observation_key, self.action_key, self.rtg_key],
+            out_keys=["loc", "scale"],
+        )
