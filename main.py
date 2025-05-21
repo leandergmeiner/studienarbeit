@@ -22,6 +22,7 @@ torch.backends.cudnn.benchmark = True
 def main():
     model_type = "transformer"
     inference_context = 128
+    inference_context = 16
 
     if model_type == "transformer":
         accumulate_grad_batches = 16
@@ -35,7 +36,6 @@ def main():
         # precision="bf16-mixed",
         max_epochs=10,
         log_every_n_steps=1,
-        accumulate_grad_batches=accumulate_grad_batches,
         logger=logger,
         callbacks=[
             ModelCheckpoint(
@@ -54,6 +54,7 @@ def main():
         inference_context=inference_context,
         target_key="target_action",
         lr=5e-4,
+        accumulate_grad_batches=accumulate_grad_batches,
     )
     
     datamodule = DoomStreamingDataModule(
@@ -61,7 +62,7 @@ def main():
         policy=model,
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
-        num_workers=1,
+        num_workers=2,
     )
     trainer.fit(model, datamodule=datamodule)
 

@@ -46,9 +46,10 @@ class LightningSequenceActor(L.LightningModule):
         target_key="target_action",
         model: torch.nn.Module | None = None,
         method: Literal["offline", "online"] = "offline",
+        accumulate_grad_batches: int = 16,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["model"])
+        self.save_hyperparameters(ignore=["model", "accumulate_grad_batches"])
         self.automatic_optimization = False
 
         self.action_key = action_key
@@ -65,13 +66,15 @@ class LightningSequenceActor(L.LightningModule):
         self.inference_context = inference_context
 
         self.method: Literal["offline", "online"] = method
+        self.init_temperature = init_temperature
 
+        self.accumulate_grad_batches = accumulate_grad_batches
         self.lr = lr
 
         # Don't declare this as a Parameter, we perform gradient descent on it on its own
         # and don't use the normal optimizer
-        self.log_temperature = torch.tensor(init_temperature, requires_grad=True).log()
 
+        self.log_temperature = None
         self.model = model
         self._training_actor = None
         self._inference_actor = None
@@ -90,15 +93,20 @@ class LightningSequenceActor(L.LightningModule):
         out: TensorDict = self.inference_actor(tensordict)
         return out
 
-    def _reshape_batch(tensordict: TensorDict):
+    def _reshape_batch(self, tensordict: TensorDict):
         # TODO: This is whack
         tensordict = tensordict.clone(False)
         if tensordict.batch_size:
             tensordict.batch_size = tensordict.batch_size[:-1]
         return tensordict
 
-    def training_step(self, batch: TensorDict):
+    def training_step(self, batch: TensorDict, batch_idx: int):
         opt, temp_opt = self.optimizers()
+
+        # UPDATE TEMPERATURE
+        x: SafeProbabilisticModule = self.training_actor[-1]
+        x.distribution_kwargs.update(temperature=self.temperature.detach())
+
         # FIXME: Use (collector, mask) for gradient computation
         batch = self._reshape_batch(batch)
 
@@ -113,20 +121,25 @@ class LightningSequenceActor(L.LightningModule):
 
         # GENERAL OPTIMIZER
         loss_value = loss["loss_log_likelihood"]
+        loss_value /= self.accumulate_grad_batches
 
         opt.zero_grad()
         self.manual_backward(loss_value)
-        opt.step()
 
         # TEMPERATURE OPTIMIZER
         entropy_delta: torch.Tensor = (
-            loss["entropy"] - self.inference_actor.target_entropy
+            loss["entropy"] - self.loss_module.target_entropy
         )
         temperature_loss = self.temperature * entropy_delta.detach()
+        temperature_loss /= self.accumulate_grad_batches
 
         temp_opt.zero_grad()
         self.manual_backward(temperature_loss)
-        temp_opt.step()
+
+        # OPTIMIZER STEP
+        if batch_idx + 1 % self.accumulate_grad_batches == 0:
+            opt.step()
+            temp_opt.step()
 
         # COMPUTE METRICS
         logits = loss[self.loss_module.tensor_keys.action_pred]
@@ -143,17 +156,19 @@ class LightningSequenceActor(L.LightningModule):
     def setup_method(self, method: Literal["offline", "online"]):
         self.method = method
 
+    def _optimizer_step_lambda(self, step: int):
+        return min(step / self.warmup_steps, 1.0)
+
     def configure_optimizers(self):
         lr = self.lr or self.learning_rate
 
-        optimizer = Lamb(
-            self.parameters(),
-            lr=lr,
-            weight_decay=5e-5,
-            betas=(0.9, 0.95),
-        )
+        params = [
+            param for param in self.parameters() if param is not self.log_temperature
+        ]
+
+        optimizer = Lamb(params, lr=lr, weight_decay=5e-4)
         scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lambda step: min(step / self.warmup_steps, 1.0)
+            optimizer, self._optimizer_step_lambda
         )
 
         optim_config = {
@@ -161,7 +176,7 @@ class LightningSequenceActor(L.LightningModule):
             "lr_scheduler": {"scheduler": scheduler, "interval": "step"},
         }
 
-        log_temperature_optimizer = torch.optim.Adam(self.log_temperature, lr=lr)
+        log_temperature_optimizer = torch.optim.Adam([self.log_temperature], lr=lr)
 
         log_temperature_optim_config = {"optimizer": log_temperature_optimizer}
 
@@ -186,6 +201,9 @@ class LightningSequenceActor(L.LightningModule):
         # model = torch.compile(model)
 
         self.model = model
+        self.log_temperature = torch.tensor(self.init_temperature).log()
+        self.log_temperature.requires_grad = True
+
         self._configure_actors()
 
     def set_tensor_keys(
@@ -219,7 +237,8 @@ class LightningSequenceActor(L.LightningModule):
             SafeProbabilisticModule(
                 in_keys=["logits"],
                 out_keys=[self.out_action_key],
-                distribution_class=torch.distributions.OneHotCategorical,
+                distribution_class=torch.distributions.RelaxedOneHotCategorical,
+                distribution_kwargs=dict(temperature=self.temperature.detach()),
             ),
         )
 
@@ -234,7 +253,8 @@ class LightningSequenceActor(L.LightningModule):
             out_action=self.out_action_key,
         )
 
-        loss_module = OnlineDTLoss(self.training_actor)
+        target_entropy = -self.num_actions
+        loss_module = OnlineDTLoss(self.training_actor, target_entropy=target_entropy)
         loss_module.tensor_keys.action_pred = self.out_action_key
         loss_module.tensor_keys.action_target = self.target_key
         self.loss_module = loss_module
