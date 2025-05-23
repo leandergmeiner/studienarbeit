@@ -428,7 +428,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     def temperature(self, value: float | torch.FloatTensor):
         if isinstance(value, torch.FloatTensor):
             value = torch.nn.Parameter(value.clone().detach())
-        elif isinstance(value, float):
+        else:
             value = torch.nn.Parameter(torch.tensor(value, device=self.device).log())
         self.loss_module.log_alpha = value
         self.actor[-1].distribution_kwargs.update(temperature=value)
