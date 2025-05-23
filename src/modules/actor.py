@@ -221,40 +221,40 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     def training_step(self, batch: TensorDict, batch_idx: int):
         opt, temp_opt = self.optimizers()
         batch = self._training_reshape_batch(batch)
-        
+
         # FIXME: Use (collector, mask) for gradient computation
 
         # Update temperature for distribution
         self.temperature = self.loss_module.alpha
-        
+
         with set_interaction_type(self._training_interaction_type):
             loss = self.loss_module(batch)
 
-        # GENERAL OPTIMIZER
-        loss_value = loss["loss_entropy"]
-        loss_value /= self.accumulate_grad_batches
-        temperature_loss = loss["loss_alpha"]  # Adjust temperature
-        temperature_loss /= self.accumulate_grad_batches
+        accumulated_grad_batches = batch_idx % self.accumulate_grad_batches == 0
 
-        self.manual_backward(loss_value)
-        self.manual_backward(temperature_loss)
+        def closure_loss():
+            loss_value = loss["loss_entropy"]
+            self.manual_backward(loss_value)
+            if accumulated_grad_batches:
+                opt.zero_grad()
 
-        # OPTIMIZER STEP
-        if batch_idx + 1 % self.accumulate_grad_batches == 0:
-            opt.step()
-            temp_opt.step()
-            opt.zero_grad()
-            temp_opt.zero_grad()
+        with opt.toggle_model(sync_grad=accumulated_grad_batches):
+            opt.step(closure=closure_loss)
 
-        # COMPUTE METRICS
+        def closure_loss_temperature():
+            temperature_loss = loss["loss_alpha"]
+            self.manual_backward(temperature_loss)
+            if accumulated_grad_batches:
+                temp_opt.zero_grad()
+
+        with temp_opt.toggle_model(sync_grad=accumulated_grad_batches):
+            temp_opt.step(closure=closure_loss_temperature)
+
         # logits = loss[self.loss_module.tensor_keys.action_pred]
         # labels = loss[self.loss_module.tensor_keys.action_target]
         # metrics = self._calculate_metrics(logits, labels)
 
-        self.log_dict(
-            {"loss_entropy": loss["loss_entropy"], "loss_alpha": loss["loss_alpha"]},
-            prog_bar=True,
-        )
+        self.log("loss_entropy", loss["loss_entropy"], prog_bar=True)
         # self.log_dict(metrics)
 
     def _training_reshape_batch(self, tensordict: TensorDict):
@@ -407,7 +407,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     @property
     def device(self):
-        return self._training_actor.device
+        return self.actor.device
 
     @property
     def training_actor(self):
@@ -426,7 +426,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     @temperature.setter
     def temperature(self, value: float | torch.FloatTensor):
-        self.loss_module.log_alpha = torch.tensor(value).log()
+        if isinstance(value, torch.FloatTensor):
+            value = torch.nn.Parameter(value.clone().detach())
+        elif isinstance(value, float):
+            value = torch.nn.Parameter(torch.tensor(value, device=self.device).log())
+        self.loss_module.log_alpha = value
         self.actor[-1].distribution_kwargs.update(temperature=value)
 
     @property
@@ -480,13 +484,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # If frame_skip > 1 only every frame_skip'th action and reward is passed to the
         # transformer, since the observations are shrunken by a factor of frame_skip
         # To keep actual context size equal, we perform some scaling.
-        temp_inference_context =  (inference_context // frame_skip)
-        
+        temp_inference_context = inference_context // frame_skip
+
         temporal_transformer = GPT2Model(
             GPT2Config(
                 vocab_size=1,
                 n_embd=hidden_size,
-                n_positions=3 * temp_inference_context, # [(R, s, a)]
+                n_positions=3 * temp_inference_context,  # [(R, s, a)]
                 n_layer=12,
                 n_head=8,
                 attn_pdrop=0.1,

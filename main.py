@@ -33,7 +33,7 @@ def main():
     logger = TensorBoardLogger("logs/", f"dt-{model_type}", default_hp_metric=False)
     trainer = Trainer(
         # precision="bf16-mixed",
-        max_epochs=10,
+        max_epochs=3,
         log_every_n_steps=1,
         logger=logger,
         callbacks=[
@@ -56,7 +56,7 @@ def main():
         accumulate_grad_batches=accumulate_grad_batches,
     )
     
-    model.setup_method("offline")
+    model.method = "offline"
     
     datamodule = DoomStreamingDataModule(
         "offline",
