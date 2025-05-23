@@ -153,7 +153,6 @@ class DoomStreamingDataModule(LightningDataModule):
             self._start_index += 1
 
             self.max_seen_rtgs[dataset_info.name] = dataset.max_seen_rtg
-            print(f"{self.max_seen_rtgs[dataset_info.name]=}")
 
     def _dataloader(self):
         return DataLoader(

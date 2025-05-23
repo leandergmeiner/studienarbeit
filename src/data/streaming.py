@@ -118,7 +118,7 @@ class GymnasiumStreamingDataset(
         batch_traj_len: int,
         max_traj_len: int,
         num_trajs: int,
-        policy: Callable,
+        policy: torch.nn.Module,
         create_env_fn: Callable | torchrl.envs.EnvCreator,
         collector_out_key: str = "action",
         num_workers: int | None = None,
@@ -259,6 +259,8 @@ class GymnasiumStreamingDataset(
             # therefore we can always reuse the same tensordict
             return_same_td=True,
             compile_policy=self.compilable,
+            device="cpu",
+            policy_device=getattr(self.policy, "device", None),
         )
 
     @property
@@ -270,7 +272,9 @@ class GymnasiumStreamingDataset(
 
 
 class LazyChainDataset(torch.utils.data.IterableDataset):
-    def __init__(self, make_datasets: Callable[[], Iterable], total_length: int | None = None):
+    def __init__(
+        self, make_datasets: Callable[[], Iterable], total_length: int | None = None
+    ):
         super().__init__()
         self.make_datasets = make_datasets
         self._len = total_length

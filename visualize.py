@@ -15,12 +15,13 @@ from torchrl.envs import (
     UnaryTransform,
     UnsqueezeTransform,
     step_mdp,
+    SerialEnv,
 )
 from torchrl.record import VideoRecorder
 from torchrl.record.loggers.csv import CSVLogger
 
 from src.data.dataset import DoomStreamingDataModule
-from src.modules import LightningSequenceActor
+from src.modules import LightningDecisionTransformer
 
 # %%
 method = "cnn"
@@ -72,10 +73,10 @@ env = TransformedEnv(
     ),
 )
 
-model = LightningSequenceActor.load_from_checkpoint(
+model = LightningDecisionTransformer.load_from_checkpoint(
     f"models/{method}/last.ckpt",
     strict=False,
-    model=LightningSequenceActor._default_model(
+    model=LightningDecisionTransformer._default_model(
         model_type=method,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
@@ -151,3 +152,61 @@ video_recorder.dump()
 print("Done")
 
 # %%
+from torchrl.modules import MultiStepActorWrapper
+
+method = "transformer"
+
+target = 300
+steps = 400
+device = "cuda:0"
+logger = CSVLogger(exp_name="test", log_dir="test_dir", video_format="mp4")
+video_recorder = VideoRecorder(
+    logger=logger, in_keys=["saved_screen"], tag=f"{method}_video", make_grid=False
+)
+
+inference_context = 64
+
+t = Compose(
+    RenameTransform(in_keys=["screen"], out_keys=["pixels"], create_copy=True),
+    ToTensorImage(),
+    UnaryTransform(
+        in_keys=["pixels"],
+        out_keys=["pixels"],
+        fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
+    ),
+    Resize((224, 224), in_keys=["pixels"]),
+    RenameTransform(
+        in_keys=["pixels"],
+        out_keys=["observation"],
+    ),
+    TargetReturn(target),
+)
+
+env = SerialEnv(1, lambda: TransformedEnv(GymEnv("sa/ArnoldDefendCenter-v0"), t))
+
+
+# %%
+# actor = LightningSequenceActor.load_from_checkpoint(
+#     f"models/{method}/last.ckpt",
+#     strict=False,
+#     model=LightningSequenceActor._default_model(
+#         model_type=method,
+#         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
+#         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
+#         inference_context=64,
+#     ),
+#     rtg_key="target_return",
+# )
+
+model = LightningDecisionTransformer(
+    model_type=method,
+    frame_skip=DoomStreamingDataModule.FRAME_SKIP,
+    num_actions=DoomStreamingDataModule.NUM_ACTIONS,
+    inference_context=64,
+    rtg_key="target_return",
+)
+
+model = model.to(device)
+
+model.on_predict_start()
+model.eval()

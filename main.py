@@ -5,7 +5,7 @@ from lightning.pytorch.callbacks import StochasticWeightAveraging, ModelCheckpoi
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data.dataset import DoomStreamingDataModule
-from src.modules import LightningSequenceActor
+from src.modules import LightningDecisionTransformer
 
 # %%
 
@@ -46,7 +46,7 @@ def main():
         ],
     )
 
-    model = LightningSequenceActor(
+    model = LightningDecisionTransformer(
         model_type=model_type,
         frame_skip=DoomStreamingDataModule.FRAME_SKIP,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
