@@ -15,7 +15,7 @@ from src.modules import LightningDecisionTransformer
 
 # This line is needed for some reason to prevent misalignement issues.
 torch.backends.cuda.enable_mem_efficient_sdp(True)
-# torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = True
 
 
 # TODO: Maybe use DeiTImageProcesseor
