@@ -237,7 +237,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # FIXME: Use (collector, mask) for gradient computation
 
         # Update temperature for distribution
-        self.temperature = self.loss_module.alpha
+        # self.temperature = self.loss_module.alpha
 
         # with set_interaction_type(self._training_interaction_type):
         loss = self.loss_module(batch)
@@ -245,25 +245,23 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         accumulated_grad_batches = batch_idx % self.accumulate_grad_batches == 0
 
         def closure_loss():
+            if accumulated_grad_batches:
+                opt.zero_grad()
             loss_value: torch.Tensor = (
                 loss["loss_entropy"] / self.accumulate_grad_batches
             )
-            loss_value.retain_grad()  # Needed, because PyTorch says so
             self.manual_backward(loss_value)
-            if accumulated_grad_batches:
-                opt.zero_grad()
 
         with opt.toggle_model(sync_grad=accumulated_grad_batches):
             opt.step(closure=closure_loss)
 
         def closure_loss_temperature():
+            if accumulated_grad_batches:
+                temp_opt.zero_grad()
             temperature_loss: torch.Tensor = (
                 loss["loss_alpha"] / self.accumulate_grad_batches
             )
-            temperature_loss.retain_grad()  # Needed, because PyTorch says so
             self.manual_backward(temperature_loss)
-            if accumulated_grad_batches:
-                temp_opt.zero_grad()
 
         with temp_opt.toggle_model(sync_grad=accumulated_grad_batches):
             temp_opt.step(closure=closure_loss_temperature)
