@@ -21,6 +21,7 @@ from torchrl.envs import CatFrames
 from torchrl.modules import (
     SafeProbabilisticModule,
     SafeProbabilisticTensorDictSequential,
+    TanhNormal,
 )
 from torchrl.objectives import OnlineDTLoss
 from transformers import GPT2Config, GPT2Model
@@ -35,7 +36,6 @@ from src.modules.modules import (
 
 
 # NOTE: Von Yannick: Hahaha, der Name ist lustig weil ... STEP-Wrapper hahaha!
-# NOTE: Von Leander: Halt's Maul!
 class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
     def __init__(
         self,
@@ -73,6 +73,9 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
 
     # Called by step
     def forward(self, tensordict: TensorDict) -> TensorDict:
+        """Method used for rollout, this means it should only take a single step tensordict,
+        since it takes care of keeping the last n steps in memory.
+        """  # FIXME <- This is soooo whack, what if multiple environments?????
         orig_td = tensordict.clone()
         orig_batch_size = orig_td.batch_size
         orig_td.batch_size = ()
@@ -84,7 +87,6 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
             tensordict = tensordict[:, None, ...]
 
         assert tensordict.batch_dims >= 1
-
         tensordict.batch_size = tensordict.batch_size[:1]
 
         td = TensorDict(
@@ -165,7 +167,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         model_type: Literal["transformer", "cnn"] = "transformer",
         frame_skip: int = 1,
         warmup_step: int = 30,
-        init_temperature: float = 0.75,
+        init_temperature: float = 1.0,
         action_key="action",
         out_action_key="action",
         observation_key="observation",
@@ -193,8 +195,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         self.num_actions = num_actions
         self.inference_context = inference_context
 
-        self.method: Literal["offline", "online"] = method
-        self.init_temperature = init_temperature
+        self.method = method
+        self.init_temperature = torch.tensor(init_temperature)
 
         self.accumulate_grad_batches = accumulate_grad_batches
         self.lr = lr
@@ -213,6 +215,16 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             }
         )
 
+        # This is a single step example for the forward method
+        self.example_input_array = TensorDict(
+            {
+                self.observation_key: torch.rand((3, 224, 224)),
+                self.action_key: torch.rand((self.num_actions)),
+                self.rtg_key: torch.rand((1)),
+                self.target_key: torch.rand((self.num_actions)),
+            }
+        )
+
     @set_interaction_type(InteractionType.RANDOM)
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
@@ -227,13 +239,16 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # Update temperature for distribution
         self.temperature = self.loss_module.alpha
 
-        with set_interaction_type(self._training_interaction_type):
-            loss = self.loss_module(batch)
+        # with set_interaction_type(self._training_interaction_type):
+        loss = self.loss_module(batch)
 
         accumulated_grad_batches = batch_idx % self.accumulate_grad_batches == 0
 
         def closure_loss():
-            loss_value = loss["loss_entropy"]
+            loss_value: torch.Tensor = (
+                loss["loss_entropy"] / self.accumulate_grad_batches
+            )
+            loss_value.retain_grad()  # Needed, because PyTorch says so
             self.manual_backward(loss_value)
             if accumulated_grad_batches:
                 opt.zero_grad()
@@ -242,7 +257,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             opt.step(closure=closure_loss)
 
         def closure_loss_temperature():
-            temperature_loss = loss["loss_alpha"]
+            temperature_loss: torch.Tensor = (
+                loss["loss_alpha"] / self.accumulate_grad_batches
+            )
+            temperature_loss.retain_grad()  # Needed, because PyTorch says so
             self.manual_backward(temperature_loss)
             if accumulated_grad_batches:
                 temp_opt.zero_grad()
@@ -260,10 +278,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     def _training_reshape_batch(self, tensordict: TensorDict):
         if tensordict.batch_dims == 1:
             tensordict = tensordict[None, ...]
-
         # Currently the model expects a batch and time dimension
         assert tensordict.batch_dims == 2
-
         tensordict.batch_size = tensordict.batch_size[:-1]
         return tensordict
 
@@ -272,9 +288,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     def configure_optimizers(self):
         lr = self.lr or self.learning_rate
-        optimizer = Lamb(self.parameters(), lr=lr, weight_decay=5e-4)
+
+        optimizer = Lamb(
+            self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True
+        )
         scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, self._optimizer_step_lambda
+            optimizer,
+            self._optimizer_step_lambda,
         )
 
         optim_config = {
@@ -313,8 +333,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
                 out_keys=["logits"],
-                distribution_class=torch.distributions.Normal,
-                return_log_prob=True,
+                distribution_class=TanhNormal,
+                # return_log_prob=True,
             ),
             SafeProbabilisticModule(
                 in_keys=["logits"],
@@ -345,11 +365,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         )
 
         target_entropy = -self.num_actions
-
         loss_module = OnlineDTLoss(
             self.training_actor,
             target_entropy=target_entropy,
             alpha_init=self.init_temperature,
+            max_alpha=1.5 * self.init_temperature,
         )
         loss_module.set_keys(
             action_pred=self.out_action_key, action_target=self.target_key
@@ -431,14 +451,15 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         else:
             value = torch.nn.Parameter(torch.tensor(value, device=self.device).log())
         self.loss_module.log_alpha = value
-        self.actor[-1].distribution_kwargs.update(temperature=value)
+        self.actor[-1].distribution_kwargs.update(temperature=torch.tensor(value))
 
     @property
-    def method(self):
+    def method(self) -> Literal["offline", "online"]:
         return self._method
 
     @method.setter
     def method(self, value: Literal["offline", "online"]):
+        assert value in ["offline", "online"]
         self._method = value
 
     @property
@@ -455,7 +476,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         frame_skip: int = 1,
         num_actions: int = 10,
         inference_context: int = 64,
-        hidden_size: int = 256,
+        hidden_size: int = 192,
         resolution: tuple[int, int] = (224, 224),
     ) -> TensorDictModule:
         # TODO: Image Processor

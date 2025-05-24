@@ -143,10 +143,10 @@ class OnlineDTActor(torch.nn.Module):
         self.ln = torch.nn.LayerNorm(hidden_dim)
 
         # TODO: Is this kind of initialisation necessary?
-        self.action_layer_mean.apply(lambda x: torch.nn.init.orthogonal_(x.weight.data))
-        self.action_layer_logstd.apply(
-            lambda x: torch.nn.init.orthogonal_(x.weight.data)
-        )
+        # self.action_layer_mean.apply(lambda x: torch.nn.init.orthogonal_(x.weight.data))
+        # self.action_layer_logstd.apply(
+        #     lambda x: torch.nn.init.orthogonal_(x.weight.data)
+        # )
 
     def forward(
         self,

@@ -14,8 +14,8 @@ from src.modules import LightningDecisionTransformer
 # TODO: Tublets, how to report the final reward? Sum should work well.
 
 # This line is needed for some reason to prevent misalignement issues.
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cudnn.benchmark = True
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+# torch.backends.cudnn.benchmark = True
 
 
 # TODO: Maybe use DeiTImageProcesseor
@@ -24,7 +24,7 @@ def main():
     inference_context = 64
 
     if model_type == "transformer":
-        accumulate_grad_batches = 16
+        accumulate_grad_batches = 12
         max_batch_size_in_mem = 4
     elif model_type == "cnn":
         accumulate_grad_batches = 24
@@ -32,7 +32,7 @@ def main():
 
     logger = TensorBoardLogger("logs/", f"dt-{model_type}", default_hp_metric=False)
     trainer = Trainer(
-        # precision="bf16-mixed",
+        # precision="bf16-true",
         max_epochs=3,
         log_every_n_steps=1,
         logger=logger,
@@ -57,7 +57,7 @@ def main():
     )
     
     model.method = "offline"
-    
+
     datamodule = DoomStreamingDataModule(
         "offline",
         policy=model,
