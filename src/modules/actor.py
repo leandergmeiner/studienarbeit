@@ -483,8 +483,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
         if model_type == "transformer":
             spatial_encoder = SpatialTransformerEncoderWrapper(
-                # "facebook/deit-small-distilled-patch16-224",
-                "microsoft/beit-base-patch16-224",
+                "facebook/deit-small-distilled-patch16-224",
+                # "microsoft/beit-base-patch16-224",
+                # FIXME: For some reason this ^ can't be properly sent across processes
+                # by PyTorch
                 frame_skip,
                 resolution,
             )

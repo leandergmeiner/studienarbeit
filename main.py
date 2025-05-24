@@ -57,6 +57,7 @@ def main():
     )
     
     model.method = "offline"
+    # model.configure_model()   
 
     datamodule = DoomStreamingDataModule(
         "offline",

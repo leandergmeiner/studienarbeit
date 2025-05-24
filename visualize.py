@@ -152,6 +152,7 @@ video_recorder.dump()
 print("Done")
 
 # %%
+# A better rollout
 from torchrl.modules import MultiStepActorWrapper
 
 method = "transformer"
