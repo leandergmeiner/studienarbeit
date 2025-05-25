@@ -40,7 +40,7 @@ def main():
             ModelCheckpoint(
                 save_last=True,
                 dirpath=f"models/{model_type}",
-                every_n_train_steps=10,  # Actually every batch_size // max_batch_size_in_mem iterations
+                every_n_train_steps=200,  # Actually every batch_size // max_batch_size_in_mem iterations
             ),
             # StochasticWeightAveraging(swa_lrs=1e-2),
         ],
