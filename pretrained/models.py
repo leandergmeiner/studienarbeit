@@ -39,7 +39,6 @@ class ArnoldAgent(torch.nn.Module):
         batch_size: int = 32,
         model_path: Path | None = None,
         available_buttons: list[vzd.Button] | None = None,
-        random_action_chance: float = 0.1,
     ):
         super().__init__()
 
@@ -192,8 +191,6 @@ class ArnoldAgent(torch.nn.Module):
 
         self.last_frames = []
 
-        self.random_action_chance = random_action_chance
-
     def forward(self, tensordict: TensorDict):
         # Selected weapon ammo
         # FIXME: Don't hard code this. Why does this occurr in the first place
@@ -227,11 +224,6 @@ class ArnoldAgent(torch.nn.Module):
 
         action_ids = scores.data.max(-1)[1]
         self.pred_features = pred_features
-
-        if self.random_action_chance > 0 and torch.rand(1) < self.random_action_chance:
-            action_ids = torch.randint_like(
-                action_ids, high=self.doom_actions.shape[0] - 1
-            )
 
         return action_ids
 

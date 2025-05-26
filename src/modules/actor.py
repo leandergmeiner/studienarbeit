@@ -53,23 +53,7 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
 
         super().__init__()
         self.actor = actor
-        # TODO: Whack WTF??
-        self.cat_frames_obs = CatFrames(n_steps, in_keys=[self.observation_key], dim=-4)
-        self.cat_frames_other = CatFrames(
-            n_steps,
-            in_keys=[
-                key
-                for key in self.actor.in_keys
-                if key != self.observation_key and key not in self.action_keys
-            ],
-            dim=-2,
-        )
-
-        # We save one action less than total frames,
-        # since we want to predict the action based on the
-        # current frame.
-        # To achieve this we always add a zero action at the start
-        self.cat_frames_action = CatFrames(n_steps, in_keys=self.action_keys, dim=-2)
+        self.reset()
 
     # Called by step
     def forward(self, tensordict: TensorDict) -> TensorDict:
@@ -110,12 +94,39 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         for key in self.actor.in_keys:
             tensordict[key] = tensordict[key].flip((1,))
 
+        # Needed because some transforms don't do the casting
+        tensordict = tensordict.to(self.device)  # TODO: Whack!
         output = self.actor(tensordict)
+        output = output.to(orig_td.device)
 
         for key, dim in zip(self.action_keys, self.action_dims):
             orig_td[key] = output[key].reshape(*orig_batch_size, dim)
 
+        orig_td.batch_size = orig_batch_size
         return orig_td
+
+    def reset(self):
+        # TODO: Whack WTF??
+        self.cat_frames_obs = CatFrames(
+            self.n_steps, in_keys=[self.observation_key], dim=-4
+        )
+        self.cat_frames_other = CatFrames(
+            self.n_steps,
+            in_keys=[
+                key
+                for key in self.actor.in_keys
+                if key != self.observation_key and key not in self.action_keys
+            ],
+            dim=-2,
+        )
+
+        # We save one action less than total frames,
+        # since we want to predict the action based on the
+        # current frame.
+        # To achieve this we always add a zero action at the start
+        self.cat_frames_action = CatFrames(
+            self.n_steps, in_keys=self.action_keys, dim=-2
+        )
 
     @property
     def in_keys(self):
@@ -156,6 +167,10 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         if not isinstance(value, list):
             value = [value]
         self._action_keys = [unravel_key(key) for key in value]
+
+    @property
+    def device(self):
+        return next(self.actor.parameters()).device
 
 
 class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
@@ -228,7 +243,21 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     @set_interaction_type(InteractionType.RANDOM)
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
-        return self.inference_actor(tensordict)
+        out = self.inference_actor(tensordict)
+        logits: torch.Tensor = out[self.out_action_key]
+        action = logits.argmax(dim=-1)
+        out[self.out_action_key] = torch.nn.functional.one_hot(action, self.num_actions)
+        return out
+
+    @dispatch
+    def predict_step(self, tensordict: TensorDict):
+        return self.forward(tensordict)
+
+    def on_predict_epoch_start(self):
+        self.inference_actor.reset()
+
+    def on_predict_epoch_end(self):
+        self.inference_actor.reset()
 
     def training_step(self, batch: TensorDict, batch_idx: int):
         opt, temp_opt = self.optimizers()
@@ -250,8 +279,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             if accumulated_grad_batches:
                 opt.zero_grad()
             loss_value: torch.Tensor = (
-                loss["loss_entropy"] / self.accumulate_grad_batches
-            )
+                loss["loss_log_likelihood"] + loss["loss_entropy"]
+            ) / self.accumulate_grad_batches
             self.manual_backward(loss_value)
 
         with opt.toggle_model(sync_grad=accumulated_grad_batches):
@@ -272,7 +301,12 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # labels = loss[self.loss_module.tensor_keys.action_target]
         # metrics = self._calculate_metrics(logits, labels)
 
-        self.log("loss_entropy", loss["loss_entropy"], prog_bar=True)
+        self.log(
+            "loss",
+            (loss["loss_log_likelihood"] + loss["loss_entropy"])
+            / self.accumulate_grad_batches,
+            prog_bar=True,
+        )
         # self.log_dict(metrics)
 
     def _training_reshape_batch(self, tensordict: TensorDict):
@@ -344,6 +378,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             ),
         )
         self._configure_actor_wrappers()
+
+        # Populate the model
+        _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
+        self.inference_actor.reset()
 
     def _configure_actor_wrappers(self):
         self._training_actor = self.actor
@@ -420,6 +458,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
         # Avoid saving the model multiple times, since its included in each actor
         return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        super().load_state_dict(state_dict, False, assign)
+        self._configure_actor_wrappers()
 
     def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
         label = label.int()

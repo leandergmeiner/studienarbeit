@@ -84,14 +84,6 @@ def _arnold_make_transforms(
             out_keys=["gamevariables"],
             fn=lambda t: t[game_variables_mask],
         ),
-        # torchrl.envs.UnaryTransform(
-        #     in_keys=[],
-        #     out_keys=[],
-        #     in_keys_inv=["action"],
-        #     out_keys_inv=["action"],
-        #     fn=lambda t: t,
-        #     inv_fn=lambda t: action_projection[t],
-        # ),
         torchrl.envs.Resize(60, 108, in_keys=["pixels"]),
         torchrl.envs.UnsqueezeTransform(dim=-4, in_keys=["pixels"]),
         torchrl.envs.CatFrames(N=4, dim=-4, in_keys=["pixels"]),  # hist_size=4
