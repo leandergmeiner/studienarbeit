@@ -366,16 +366,16 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             model,
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
-                out_keys=["logits"],
-                distribution_class=TanhNormal,
-                # return_log_prob=True,
-            ),
-            SafeProbabilisticModule(
-                in_keys=["logits"],
                 out_keys=[self.out_action_key],
-                distribution_class=torch.distributions.RelaxedOneHotCategorical,
-                distribution_kwargs=dict(temperature=self.init_temperature),
+                distribution_class=TanhNormal,
+                distribution_kwargs={"low": 0., "high": 1.}
             ),
+            # SafeProbabilisticModule(
+            #     in_keys=["logits"],
+            #     out_keys=[self.out_action_key],
+            #     distribution_class=torch.distributions.RelaxedOneHotCategorical,
+            #     distribution_kwargs=dict(temperature=self.init_temperature),
+            # ),
         )
         self.actor.to("cpu")
         self._configure_actor_wrappers()
