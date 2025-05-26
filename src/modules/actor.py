@@ -96,7 +96,6 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
 
         # Needed because some transforms don't do the casting
         tensordict = tensordict.to(self.device)  # TODO: Whack!
-        print(tensordict)
         output = self.actor(tensordict)
         output = output.to(orig_td.device)
 
@@ -382,7 +381,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         self._configure_actor_wrappers()
 
         # Populate the model
-        print("self.inference_actor.device", set(p.device for p in self.actor.parameters()))
         _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
         self.inference_actor.reset()
 

@@ -27,9 +27,7 @@ class DatasetInfo:
 _DOOM_DATASETS = [
     DatasetInfo(
         name="defend_the_center",
-        policy_maker=partial(
-            ArnoldAgent, "defend_the_center", random_action_chance=0.1
-        ),
+        policy_maker=partial(ArnoldAgent, "defend_the_center"),
         create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
         max_steps=1_000_000,
         max_steps_per_traj=500,
@@ -104,7 +102,9 @@ class DoomStreamingDataModule(LightningDataModule):
             dataset.max_steps // (self.batch_size * self.batch_traj_len)
             for dataset in datasets
         )
-        self._dataset = LazyChainDataset(partial(self._dataset_iterator, datasets), total_length=total_length)
+        self._dataset = LazyChainDataset(
+            partial(self._dataset_iterator, datasets), total_length=total_length
+        )
         self.current_dataset = None
 
     def _dataset_iterator(
