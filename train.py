@@ -1,7 +1,7 @@
 # %%
 import torch
 from lightning import Trainer
-from lightning.pytorch.callbacks import StochasticWeightAveraging, ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from src.data.dataset import DoomStreamingDataModule
@@ -30,7 +30,7 @@ def main():
         accumulate_grad_batches = 32
         max_batch_size_in_mem = 2
 
-    logger = TensorBoardLogger("logs/", f"dt-{model_type}", default_hp_metric=False)
+    logger = TensorBoardLogger("logs/", model_type, default_hp_metric=False)
     trainer = Trainer(
         # precision="bf16-true",
         max_epochs=10,

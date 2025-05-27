@@ -1,110 +1,16 @@
-import warnings
-from functools import partial
 from itertools import islice
 from typing import Callable, Iterable, Iterator
 
 import numpy as np
 import torch
 import torchrl.envs
-from einops import rearrange
 from tensordict import TensorDict
+from torchrl.collectors import SyncDataCollector
 from torchrl.data import (
     LazyTensorStorage,
     SliceSampler,
     TensorDictReplayBuffer,
 )
-from torchrl.collectors import SyncDataCollector
-
-
-def default_observation_transform(
-    collector_out_key: str,
-    observation_shape: tuple[int, int] = (224, 224),
-    reward_key=("next", "reward"),
-    exclude_next_observation: bool = False,
-):
-    pixels_keys = (
-        ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
-    )
-
-    inverse_transforms = torchrl.envs.Compose(
-        # TODO: Naming
-        torchrl.envs.Reward2GoTransform(in_keys=reward_key, out_keys=["return_to_go"]),
-        torchrl.envs.RenameTransform(
-            in_keys=[],
-            out_keys=[],
-            out_keys_inv=[
-                ("original", "pixels"),
-                ("next", "original", "pixels"),
-            ],
-            in_keys_inv=["pixels", ("next", "pixels")],
-        ),
-        torchrl.envs.ExcludeTransform("labels", "labels_buffer", inverse=True),
-        torchrl.envs.DTypeCastTransform(
-            dtype_in=torch.int64,
-            dtype_out=torch.bool,
-            in_keys_inv=[collector_out_key],
-        ),
-    )
-
-    if exclude_next_observation:
-        inverse_transforms.append(
-            torchrl.envs.ExcludeTransform(("next", "pixels"), inverse=True)
-        )
-
-    forward_transforms = torchrl.envs.Compose(
-        # Forward
-        torchrl.envs.ToTensorImage(
-            in_keys=pixels_keys,
-            out_keys=pixels_keys,
-            shape_tolerant=True,
-        ),
-        torchrl.envs.ExcludeTransform("original", ("next", "original")),
-        # TODO: Already apply this for .inv(...)
-        torchrl.envs.DTypeCastTransform(
-            dtype_in=torch.bool,
-            dtype_out=torch.float,
-            in_keys=[collector_out_key],
-        ),
-        # TODO: Already apply this for .inv(...)
-        torchrl.envs.UnaryTransform(
-            in_keys=[collector_out_key],
-            out_keys=["target_action"],
-            fn=lambda td: td.roll(shifts=-1, dims=-2),
-        ),
-        torchrl.envs.UnaryTransform(
-            in_keys=pixels_keys,
-            out_keys=pixels_keys,
-            fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
-        ),
-        torchrl.envs.Resize(observation_shape, in_keys=pixels_keys),
-    )
-
-    # TODO: This Rename is awkward
-    if exclude_next_observation:
-        forward_transforms.append(
-            torchrl.envs.RenameTransform(
-                in_keys=["pixels"],
-                out_keys=["observation"],
-            ),
-        )
-    else:
-        forward_transforms.append(
-            torchrl.envs.RenameTransform(
-                in_keys=[
-                    "pixels",
-                    ("next", "pixels"),
-                ],
-                out_keys=[
-                    "observation",
-                    ("next", "observation"),
-                ],
-            )
-        )
-
-    return torchrl.envs.Compose(
-        inverse_transforms,
-        forward_transforms,
-    )
 
 
 class GymnasiumStreamingDataset(
@@ -120,25 +26,12 @@ class GymnasiumStreamingDataset(
         num_trajs: int,
         policy: torch.nn.Module,
         create_env_fn: Callable | torchrl.envs.EnvCreator,
-        collector_out_key: str = "action",
         num_workers: int | None = None,
-        max_seen_rtg: float | None = None,
-        make_transform: Callable = default_observation_transform,
-        make_transform_kwargs: dict = dict(),
         reward_key=("next", "reward"),
         compilable: bool = True,
-        **kwargs,
+        transform: torchrl.envs.Transform | None = None,
+        max_seen_rtg: float | None = None
     ):
-        if any((kwargs.pop("storage", None), kwargs.pop("sampler", None))):
-            warnings.warn(
-                "`storage` or `sampler` keyword was passed. Their values are ignored."
-            )
-
-        # if batch_size > num_trajs:
-        #     warnings.warn(
-        #         f"Can not utilize full batch size ({batch_size}), as only {num_trajs} are kept in memory at one time."
-        #     )
-
         assert max_traj_len >= batch_traj_len
 
         storage_size = num_trajs * max_traj_len
@@ -146,16 +39,13 @@ class GymnasiumStreamingDataset(
         self.batch_traj_len = batch_traj_len
         self.num_slices = batch_size
         self.max_steps = size
-        self.collector_out_key = collector_out_key
-
-        self.create_env_fn = partial(create_env_fn, max_seen_rtg=max_seen_rtg)
+        self.create_env_fn = create_env_fn
         self.num_workers = num_workers
         self.policy = policy
+        self._max_seen_rtg = max_seen_rtg
         self.storage_size = storage_size
         self.max_traj_len = max_traj_len
-
         self.reward_key = reward_key
-
         self.compilable = compilable
 
         storage = LazyTensorStorage(
@@ -190,12 +80,6 @@ class GymnasiumStreamingDataset(
             use_gpu=self.compilable,
         )
 
-        transform = make_transform(
-            collector_out_key=collector_out_key,
-            reward_key=self.reward_key,
-            **make_transform_kwargs,
-        )
-
         batch_size_transitions = batch_size * batch_traj_len
 
         super().__init__(
@@ -205,10 +89,8 @@ class GymnasiumStreamingDataset(
             transform=transform,
             shared=True,
             compilable=True,
-            **kwargs,
         )
 
-        self._max_seen_rtg = max_seen_rtg
 
     def __iter__(self) -> Iterator[TensorDict]:
         collector = self.collector()
@@ -248,7 +130,6 @@ class GymnasiumStreamingDataset(
     def collector(self):
         return SyncDataCollector(
             self.create_env_fn,
-            create_env_kwargs=dict(num_workers=self.num_workers),
             policy=self.policy,
             total_frames=-1,
             frames_per_batch=self.storage_size,

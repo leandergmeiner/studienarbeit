@@ -1,8 +1,8 @@
 # %%
+import warnings
 from logging import getLogger
 from pathlib import Path
 from typing import Literal
-import warnings
 
 import torch
 import vizdoom as vzd
@@ -15,7 +15,7 @@ from pretrained.arnold.src.doom.labels import parse_labels_mapping
 from pretrained.arnold.src.model import get_model_class
 from pretrained.arnold.src.model.bucketed_embedding import BucketedEmbedding
 from pretrained.common import dotdict
-from src.data.env import DOOM_BUTTONS
+from src.data.transforms import DOOM_BUTTONS
 
 logger = getLogger()
 

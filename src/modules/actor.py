@@ -127,7 +127,7 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         self.cat_frames_action = CatFrames(
             self.n_steps, in_keys=self.action_keys, dim=-2
         )
-        
+
     @property
     def in_keys(self):
         return self.actor.in_keys + [self.init_key]
@@ -304,6 +304,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             prog_bar=True,
         )
         self.log_dict(loss)
+        self.log("lr", opt.optimizer.lr)
         # self.log_dict(metrics)
 
     def _training_reshape_batch(self, tensordict: TensorDict):
@@ -314,8 +315,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         tensordict.batch_size = tensordict.batch_size[:-1]
         return tensordict
 
-    def _optimizer_step_lambda(self, step: int):
-        return min(step / self.warmup_steps, 1.0)
+    # def _optimizer_step_lambda(self, step: int):
+    #     return min(step / self.warmup_steps, 1.0)
 
     def configure_optimizers(self):
         lr = self.lr or self.learning_rate
@@ -323,9 +324,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         optimizer = Lamb(
             self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True
         )
-        scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer,
-            self._optimizer_step_lambda,
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=3000
         )
 
         optim_config = {
@@ -369,7 +369,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             SafeProbabilisticModule(
                 in_keys=["logits"],
                 out_keys=[self.out_action_key],
-                distribution_class=torch.distributions.OneHotCategoricalStraightThrough
+                distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
             ),
         )
         self.actor.to("cpu")

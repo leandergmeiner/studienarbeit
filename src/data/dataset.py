@@ -1,17 +1,22 @@
+import random
 from copy import deepcopy
-from functools import partial
-from typing import Any, Callable, Iterator, Literal, Iterable
 from dataclasses import dataclass
+from functools import partial
+from typing import Any, Callable, Iterable, Iterator, Literal
 
 import numpy as np
 import torch
 from lightning import LightningDataModule
+from tensordict.nn import TensorDictModule
 from torch.utils.data import DataLoader, IterableDataset
+from torchrl.envs import Compose, GymEnv, SerialEnv, TargetReturn, TransformedEnv
 
 from pretrained.models import ArnoldAgent
-from src.data.env import make_env
 from src.data.streaming import GymnasiumStreamingDataset, LazyChainDataset
-import random
+from src.data.transforms import (
+    arnold_dataset_make_transforms,
+    arnold_env_make_transforms,
+)
 
 
 @dataclass
@@ -21,6 +26,8 @@ class DatasetInfo:
     max_steps: int
     max_steps_per_traj: int
     policy_maker: torch.nn.Module | None = None
+    make_env_transforms: Callable[..., list] = list
+    make_dataset_transforms: Callable[..., list] = list
     target_return_scaling_factor: float = 1.5
 
 
@@ -28,7 +35,14 @@ _DOOM_DATASETS = [
     DatasetInfo(
         name="defend_the_center",
         policy_maker=partial(ArnoldAgent, "defend_the_center"),
-        create_env_fn=partial(make_env, "sa/ArnoldDefendCenter-v0"),
+        create_env_fn=lambda: GymEnv("sa/ArnoldDefendCenter-v0"),
+        make_env_transforms=arnold_env_make_transforms,
+        make_dataset_transforms=partial(
+            arnold_dataset_make_transforms,
+            observation_shape=(224, 224),
+            exclude_next_observation=True,
+            collector_out_key="action",
+        ),
         max_steps=1_000_000,
         max_steps_per_traj=500,
     ),
@@ -49,17 +63,17 @@ _DOOM_DATASETS = [
     # ),
 ]
 _NUM_ACTIONS = 10
-_FRAME_SKIP = 4  # TODO: This number is not enforced
+# _FRAME_SKIP = 4  # TODO: This number is not enforced
 
 
 class DoomStreamingDataModule(LightningDataModule):
     NUM_ACTIONS = _NUM_ACTIONS
-    FRAME_SKIP = _FRAME_SKIP
+    # FRAME_SKIP = _FRAME_SKIP
 
     def __init__(
         self,
         method: Literal["offline", "online"] = "offline",
-        policy: Callable | None = None,
+        policy: TensorDictModule | None = None,
         batch_size: int | None = None,
         batch_traj_len: int = 64,
         num_workers: int = 0,
@@ -83,8 +97,9 @@ class DoomStreamingDataModule(LightningDataModule):
         self._start_index = 0
         self._dataset_start_index = 0
 
-    def setup_method(self, method: Literal["offline", "online"]):
+    def set_mode(self, method: Literal["offline", "online"], policy: TensorDictModule):
         self.method = method
+        self.policy = policy
 
     def setup(self, stage):
         # self.stage = stage
@@ -105,7 +120,6 @@ class DoomStreamingDataModule(LightningDataModule):
         self._dataset = LazyChainDataset(
             partial(self._dataset_iterator, datasets), total_length=total_length
         )
-        self.current_dataset = None
 
     def _dataset_iterator(
         self, datasets: Iterable[DatasetInfo]
@@ -117,8 +131,15 @@ class DoomStreamingDataModule(LightningDataModule):
             if max_seen_rtg is not None:
                 max_seen_rtg *= dataset_info.target_return_scaling_factor
 
-            create_env_fn = dataset_info.create_env_fn
-            create_env_fn = partial(create_env_fn, num_workers=self.num_workers)
+            def make_env():
+                env = dataset_info.create_env_fn()
+                wrapped = TransformedEnv(
+                    env, Compose(*dataset_info.make_env_transforms())
+                )
+                if max_seen_rtg is not None:
+                    wrapped.append_transform(TargetReturn(max_seen_rtg))
+
+                return wrapped
 
             # _dataset_start_index is not 0 if we loaded from a state dict
             size = dataset_info.max_steps - self._dataset_start_index
@@ -135,14 +156,11 @@ class DoomStreamingDataModule(LightningDataModule):
                 batch_traj_len=self.batch_traj_len,
                 max_traj_len=dataset_info.max_steps_per_traj,
                 num_trajs=self.num_trajs,
-                policy=policy,
                 num_workers=self.num_workers,
-                create_env_fn=create_env_fn,
+                policy=policy,
                 max_seen_rtg=max_seen_rtg,
-                make_transform_kwargs=dict(
-                    observation_shape=(224, 224),
-                    exclude_next_observation=True,
-                ),  # TODO: This is whack
+                create_env_fn=lambda: SerialEnv(1, make_env),
+                transform=dataset_info.make_dataset_transforms(),
                 compilable=True,
             )
 
@@ -167,6 +185,10 @@ class DoomStreamingDataModule(LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         return self._dataloader()
+
+    def teardown(self, stage):
+        del self._dataset
+        del self.current_dataset
 
     @property
     def batch_size(self):
