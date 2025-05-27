@@ -304,7 +304,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             prog_bar=True,
         )
         self.log_dict(loss)
-        self.log("lr", opt.optimizer.lr)
         # self.log_dict(metrics)
 
     def _training_reshape_batch(self, tensordict: TensorDict):
