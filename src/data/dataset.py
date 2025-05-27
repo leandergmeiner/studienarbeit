@@ -35,7 +35,7 @@ _DOOM_DATASETS = [
     DatasetInfo(
         name="defend_the_center",
         policy_maker=partial(ArnoldAgent, "defend_the_center"),
-        create_env_fn=lambda: GymEnv("sa/ArnoldDefendCenter-v0"),
+        create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
         make_env_transforms=arnold_env_make_transforms,
         make_dataset_transforms=partial(
             arnold_dataset_make_transforms,
@@ -131,15 +131,19 @@ class DoomStreamingDataModule(LightningDataModule):
             if max_seen_rtg is not None:
                 max_seen_rtg *= dataset_info.target_return_scaling_factor
 
-            def make_env():
-                env = dataset_info.create_env_fn()
-                wrapped = TransformedEnv(
-                    env, Compose(*dataset_info.make_env_transforms())
-                )
-                if max_seen_rtg is not None:
-                    wrapped.append_transform(TargetReturn(max_seen_rtg))
+            def make_env_serial():
+                def make_env():
+                    env = dataset_info.create_env_fn()
+                    wrapped = TransformedEnv(
+                        env, Compose(*dataset_info.make_env_transforms())
+                    )
+                    if max_seen_rtg is not None:
+                        wrapped.append_transform(TargetReturn(max_seen_rtg))
 
-                return wrapped
+                    return wrapped
+                    
+                return SerialEnv(1, make_env)
+            
 
             # _dataset_start_index is not 0 if we loaded from a state dict
             size = dataset_info.max_steps - self._dataset_start_index
@@ -159,7 +163,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 num_workers=self.num_workers,
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
-                create_env_fn=lambda: SerialEnv(1, make_env),
+                create_env_fn=make_env_serial,
                 transform=dataset_info.make_dataset_transforms(),
                 compilable=True,
             )
