@@ -42,7 +42,7 @@ def default_observation_transform(
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.int64,
             dtype_out=torch.bool,
-            in_keys_inv=["action"],
+            in_keys_inv=[collector_out_key],
         ),
     )
 
@@ -63,7 +63,7 @@ def default_observation_transform(
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.bool,
             dtype_out=torch.float,
-            in_keys=["action"],
+            in_keys=[collector_out_key],
         ),
         # TODO: Already apply this for .inv(...)
         torchrl.envs.UnaryTransform(

@@ -307,6 +307,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             / self.accumulate_grad_batches,
             prog_bar=True,
         )
+        self.log_dict(loss)
         # self.log_dict(metrics)
 
     def _training_reshape_batch(self, tensordict: TensorDict):
@@ -370,12 +371,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 distribution_class=TanhNormal,
                 distribution_kwargs={"low": 0., "high": 1.}
             ),
-            # SafeProbabilisticModule(
-            #     in_keys=["logits"],
-            #     out_keys=[self.out_action_key],
-            #     distribution_class=torch.distributions.RelaxedOneHotCategorical,
-            #     distribution_kwargs=dict(temperature=self.init_temperature),
-            # ),
         )
         self.actor.to("cpu")
         self._configure_actor_wrappers()
@@ -537,7 +532,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             )
 
         spatial_encoder = spatial_encoder.train()
-
         # If frame_skip > 1 only every frame_skip'th action and reward is passed to the
         # transformer, since the observations are shrunken by a factor of frame_skip
         # To keep actual context size equal, we perform some scaling.

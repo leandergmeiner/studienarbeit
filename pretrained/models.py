@@ -200,14 +200,15 @@ class ArnoldAgent(torch.nn.Module):
         gamevariables[gamevariables < 0] = 0
         tensordict["gamevariables"] = gamevariables
 
-        def convert_action(action_id: torch.Tensor):
-            button_map = self.doom_actions[action_id]
+        def convert_action(action_ids: torch.Tensor):
+            button_map = self.doom_actions[action_ids]
             zeros = torch.zeros_like(button_map[..., :, :1])
             button_map = torch.cat((button_map, zeros), dim=-1)
             return button_map.flip(dims=(-1,))
 
         # TODO: Solve this more elegantly using categorical actions specs in the env.
-        actions = convert_action(self.next_action(tensordict))
+        action_ids = self.next_action(tensordict)
+        actions = convert_action(action_ids)
         tensordict[self.action_key] = actions
         tensordict["gamevariables"] = old_gamevariables
         return tensordict

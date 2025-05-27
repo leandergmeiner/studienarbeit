@@ -24,7 +24,7 @@ class VideoDT(nn.Module):
         frame_skip: int,
         spatial_encoder: nn.Module,
         temporal_transformer: nn.Module,
-        dropout: nn.Module = nn.Identity(),
+        dropout: float = 0.1,
     ):
         super().__init__()
 
@@ -37,7 +37,7 @@ class VideoDT(nn.Module):
         self.embed_return = nn.LazyLinear(self.hidden_size)
         self.embed_action = nn.LazyLinear(self.hidden_size)
 
-        self.dropout = dropout
+        self.dropout = nn.Dropout(dropout)
 
         self.embedding_ln = nn.LayerNorm(hidden_size)
 

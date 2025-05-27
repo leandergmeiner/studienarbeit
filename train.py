@@ -48,7 +48,8 @@ def main():
 
     model = LightningDecisionTransformer(
         model_type=model_type,
-        frame_skip=DoomStreamingDataModule.FRAME_SKIP,
+        # frame_skip=DoomStreamingDataModule.FRAME_SKIP,
+        frame_skip=1,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,
         target_key="target_action",
@@ -57,7 +58,8 @@ def main():
     )
     
     model.method = "offline"
-    # model.configure_model()   
+    # model.configure_model()
+
 
     datamodule = DoomStreamingDataModule(
         "offline",

@@ -1,9 +1,7 @@
-# %%
 import torch
 from einops import rearrange
 from torchrl.envs import (
     Compose,
-    ExcludeTransform,
     GymEnv,
     RenameTransform,
     Resize,
@@ -18,6 +16,10 @@ from torchrl.record.loggers.csv import CSVLogger
 
 from src.data.dataset import DoomStreamingDataModule
 from src.modules import LightningDecisionTransformer
+from tensordict import TensorDict
+
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cudnn.benchmark = True
 
 model_type = "transformer"
 
@@ -48,8 +50,8 @@ t = Compose(
     TargetReturn(target),
     ToTensorImage(in_keys=["screen"], out_keys=["saved_screen"], from_int=False),
     Resize((224, 224), in_keys=["saved_screen"]),
-    video_recorder,
-    ExcludeTransform("screen", "saved_screen"),
+    # video_recorder,
+    # ExcludeTransform("screen"),
 )
 
 logger = CSVLogger(exp_name="test", log_dir="test_dir", video_format="mp4")
@@ -58,7 +60,6 @@ video_recorder = VideoRecorder(
 )
 
 env = GymEnv("sa/ArnoldDefendCenter-v0")
-
 env = TransformedEnv(env, t)
 
 print("Loading model")
@@ -81,12 +82,15 @@ print("Starting rollout")
 # respect the FrameSkipTransform, apparently
 
 input_td = env.reset()
-action = env.rand_action()
+action = TensorDict(action=[0])
 
 
 def next_action(tensordict):
     return action
 
+
+actions = []
+obs = []
 for i in range(steps):
     rollout_td = env.rollout(
         policy=next_action,
@@ -98,7 +102,12 @@ for i in range(steps):
     input_td = step_mdp(
         rollout_td[..., -1],
     )
+    obs.append(rollout_td["saved_screen"])
     action = model(input_td)
+    # action["action"] = action["action"].flip(-1).roll(-2)
+    # action["action"] = action["action"].flip(-1)
+    actions.append(action["action"])
 
+video_recorder.obs = torch.cat(obs).unbind(0)
 video_recorder.dump()
 print("Done")
