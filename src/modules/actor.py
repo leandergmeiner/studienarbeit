@@ -371,10 +371,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
             ),
         )
-        self.actor.to("cpu")
         self._configure_actor_wrappers()
 
         # Populate the model
+        self.to("cpu")
         _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
         self.inference_actor.reset()
 
@@ -513,8 +513,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             spatial_encoder = SpatialTransformerEncoderWrapper(
                 "facebook/deit-small-distilled-patch16-224",
                 # "microsoft/beit-base-patch16-224",
-                # FIXME: For some reason this ^ can't be properly sent across processes
-                # by PyTorch
                 frame_skip,
                 resolution,
             )
@@ -530,7 +528,12 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 "microsoft/resnet-50", hidden_size
             )
 
-        spatial_encoder = spatial_encoder.train()
+        # spatial_encoder = spatial_encoder.train()
+
+        spatial_encoder = spatial_encoder.eval()
+        if model_type == "transformer":
+            spatial_encoder.patching.train()
+        
         # If frame_skip > 1 only every frame_skip'th action and reward is passed to the
         # transformer, since the observations are shrunken by a factor of frame_skip
         # To keep actual context size equal, we perform some scaling.

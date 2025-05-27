@@ -64,7 +64,7 @@ class PatchEmbedding(nn.Module):
             distillation_tokens = self.states_distillation_token.expand(b, t, -1, -1)
             tokens.insert(1, distillation_tokens)
 
-        embeddings = torch.cat(tuple(tokens), dim=-2)
+        embeddings = torch.cat(tokens, dim=-2)
         embeddings += self.states_position_embeddings
         return embeddings
 

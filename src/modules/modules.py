@@ -1,16 +1,14 @@
-from typing import Mapping
+from typing import Mapping, Optional
 
 import torch
+import torchrl
 from einops import rearrange, repeat
-from torch import Tensor, nn, vmap
-
 from tensordict import TensorDictBase
 from tensordict.nn import TensorDictModule
-from typing import Optional
-
-import torchrl
-from src.modules.types import TrajectoryModel
+from torch import Tensor, nn
 from torchrl.modules import DecisionTransformerInferenceWrapper
+
+from src.modules.types import TrajectoryModel
 
 # TODO: Image Processor
 
@@ -112,24 +110,6 @@ class VideoDT(nn.Module):
         # we reverse that action for gradient descent.
         return repeat(outputs, "b n d -> b (n r) d", r=self.frame_skip)
 
-    def get_states(self, observation: Tensor):
-        patches = self.patching(observation)
-        patches = self.dropout(patches)
-
-        # with torch.autocast(device_type='cuda', dtype=torch.float16):
-        # states: Tensor = vmap(self.spatial_transformer, in_dims=-4)(
-        #     patches, resolution=observation.shape[-2:]
-        # )
-        states: Tensor = vmap(self.spatial_encoder, in_dims=-4)(observation)
-
-        if isinstance(states, Mapping):
-            states = states["last_hidden_state"]
-
-        # Get [CLS] token of the spatial encoder
-        states = states[..., 0, :]  # b;t;embedding_dim
-
-        return states
-
 
 class OnlineDTActor(torch.nn.Module):
     def __init__(self, model: TrajectoryModel, hidden_dim: int, action_dim: int):
@@ -229,13 +209,15 @@ class SpatialTransformerEncoderWrapper(torch.nn.Module):
         frame_skip: int = 4,
         resolution: tuple[int, int] | None = (224, 224),
     ):
-        from transformers import AutoModel
-        from src.modules.conv import PatchEmbedding
         from inspect import getfullargspec
+
+        from transformers import AutoModel
+
+        from src.modules.conv import PatchEmbedding
 
         super().__init__()
         model = AutoModel.from_pretrained(
-            model_name_or_path, attn_implementation="sdpa", add_pooling_layer=False
+            model_name_or_path, add_pooling_layer=False
         )
 
         self.encoder = model.encoder
