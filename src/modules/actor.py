@@ -127,7 +127,7 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         self.cat_frames_action = CatFrames(
             self.n_steps, in_keys=self.action_keys, dim=-2
         )
-
+        
     @property
     def in_keys(self):
         return self.actor.in_keys + [self.init_key]
@@ -243,11 +243,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     @set_interaction_type(InteractionType.RANDOM)
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
-        out = self.inference_actor(tensordict)
-        logits: torch.Tensor = out[self.out_action_key]
-        action = logits.argmax(dim=-1)
-        out[self.out_action_key] = torch.nn.functional.one_hot(action, self.num_actions)
-        return out
+        return self.inference_actor(tensordict)
 
     @dispatch
     def predict_step(self, tensordict: TensorDict):
@@ -367,9 +363,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             model,
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
-                out_keys=[self.out_action_key],
+                out_keys=["logits"],
                 distribution_class=TanhNormal,
-                distribution_kwargs={"low": 0., "high": 1.}
+            ),
+            SafeProbabilisticModule(
+                in_keys=["logits"],
+                out_keys=[self.out_action_key],
+                distribution_class=torch.distributions.OneHotCategoricalStraightThrough
             ),
         )
         self.actor.to("cpu")

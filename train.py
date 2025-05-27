@@ -24,16 +24,16 @@ def main():
     inference_context = 64
 
     if model_type == "transformer":
-        accumulate_grad_batches = 12
-        max_batch_size_in_mem = 4
+        accumulate_grad_batches = 32
+        max_batch_size_in_mem = 2
     elif model_type == "cnn":
-        accumulate_grad_batches = 24
+        accumulate_grad_batches = 32
         max_batch_size_in_mem = 2
 
     logger = TensorBoardLogger("logs/", f"dt-{model_type}", default_hp_metric=False)
     trainer = Trainer(
         # precision="bf16-true",
-        max_epochs=3,
+        max_epochs=10,
         log_every_n_steps=1,
         logger=logger,
         callbacks=[

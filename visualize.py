@@ -94,7 +94,7 @@ obs = []
 for i in range(steps):
     rollout_td = env.rollout(
         policy=next_action,
-        max_steps=DoomStreamingDataModule.FRAME_SKIP,
+        max_steps=model.frame_skip,
         break_when_any_done=False,
         auto_reset=False,
         tensordict=input_td,
