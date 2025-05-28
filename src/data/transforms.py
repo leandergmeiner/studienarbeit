@@ -131,6 +131,7 @@ def arnold_dataset_make_transforms(
     observation_shape: tuple[int, int] = (224, 224),
     reward_key=("next", "reward"),
     exclude_next_observation: bool = False,
+    rtg_key="return_to_go",
 ):
     pixels_keys = (
         ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
@@ -138,7 +139,7 @@ def arnold_dataset_make_transforms(
 
     inverse_transforms = torchrl.envs.Compose(
         # TODO: Naming
-        torchrl.envs.Reward2GoTransform(in_keys=reward_key, out_keys=["return_to_go"]),
+        torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
         torchrl.envs.RenameTransform(
             in_keys=[],
             out_keys=[],
@@ -245,6 +246,7 @@ def online_dataset_make_transforms(
     collector_out_key: str,
     reward_key=("next", "reward"),
     exclude_next_observation: bool = False,
+    rtg_key="return_to_go",
 ):
     pixels_keys = (
         ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
@@ -252,7 +254,7 @@ def online_dataset_make_transforms(
 
     inverse_transforms = torchrl.envs.Compose(
         # TODO: Naming
-        torchrl.envs.Reward2GoTransform(in_keys=reward_key, out_keys=["return_to_go"]),
+        torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
         torchrl.envs.RenameTransform(
             in_keys=[],
             out_keys=[],

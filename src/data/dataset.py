@@ -46,6 +46,7 @@ _DOOM_DATASETS = [
             observation_shape=(224, 224),
             exclude_next_observation=True,
             collector_out_key="action",
+            rtg_key="target_return",
         ),
         max_steps=1_000_000,
         max_steps_per_traj=500,
@@ -58,7 +59,9 @@ _DOOM_DATASETS = [
         # TODO:
         make_env_transforms=online_env_make_transforms,
         make_dataset_transforms=partial(
-            online_dataset_make_transforms, observation_shape=(224, 224)
+            online_dataset_make_transforms,
+            observation_shape=(224, 224),
+            rtg_key="target_return",
         ),
         max_steps=250_000,
         max_steps_per_traj=500,
