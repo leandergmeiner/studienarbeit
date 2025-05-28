@@ -497,7 +497,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             "online": InteractionType.RANDOM,
             "offline": InteractionType.DETERMINISTIC,
         }
-        return interaction_type_mapping[self._method]
+        return interaction_type_mapping[self.method]
 
     def _default_model(
         self,

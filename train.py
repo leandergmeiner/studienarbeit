@@ -43,8 +43,6 @@ def main():
 
     model = LightningDecisionTransformer(
         model_type=model_type,
-        # frame_skip=DoomStreamingDataModule.FRAME_SKIP,
-        frame_skip=1,
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,
         target_key="target_action",
@@ -53,25 +51,22 @@ def main():
         accumulate_grad_batches=accumulate_grad_batches,
     )
     
-    model.method = "offline"
-    # model.configure_model()
-
-
     datamodule = DoomStreamingDataModule(
-        "offline",
-        policy=model,
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
         num_workers=3,
         num_trajs=2,
     )
+    
+    # Offline training
+    model.method = "offline"
+    datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule)
     
-    # FIXME: Fix online training / online rollout
-
-    # datamodule.setup_generation("offline")
-    # trainer.fit(model, datamodule=datamodule)
-
+    # Online training
+    model.method = "online"
+    datamodule.set_mode("online", None)
+    trainer.fit(model, datamodule=datamodule)
 
 if __name__ == "__main__":
     main()
