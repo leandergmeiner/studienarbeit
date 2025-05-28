@@ -55,7 +55,7 @@ def main():
     datamodule = DoomStreamingDataModule(
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
-        # num_workers=3,s
+        num_workers=3,
         num_trajs=2,
     )
     
