@@ -80,7 +80,8 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
             },
             batch_size=[],
         )
-
+        
+        print(tensordict)
         tensordict = self.cat_frames_obs._call(tensordict)
         tensordict = self.cat_frames_other._call(tensordict)
 

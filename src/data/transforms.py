@@ -83,7 +83,7 @@ def arnold_env_make_transforms(
     # TODO: Solve this more elegantly using categorical actions specs in the env.
     game_variables_mask = get_game_variables_mask(game_variables)
     # action_projection = get_action_up_projection(ARNOLD_DTD_ENV_AVAILABLE_ACTIONS)
-    t = Compose(
+    t = [
         *standard_offline_env_make_transforms(),
         torchrl.envs.UnaryTransform(
             in_keys=["gamevariables"],
@@ -96,8 +96,7 @@ def arnold_env_make_transforms(
         torchrl.envs.FrameSkipTransform(
             frame_skip
         ),  # from Arnold DefendTheCenter config
-        torchrl.envs.TargetReturn(target_return),
-    )
+    ]
 
     if target_return is not None:
         t.append(TargetReturn(target_return))
@@ -137,7 +136,7 @@ def arnold_dataset_make_transforms(
         ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
     )
 
-    inverse_transforms = torchrl.envs.Compose(
+    inverse_transforms = [
         # TODO: Naming
         torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
         torchrl.envs.RenameTransform(
@@ -155,14 +154,14 @@ def arnold_dataset_make_transforms(
             dtype_out=torch.bool,
             in_keys_inv=[collector_out_key],
         ),
-    )
+    ]
 
     if exclude_next_observation:
         inverse_transforms.append(
             torchrl.envs.ExcludeTransform(("next", "pixels"), inverse=True)
         )
 
-    forward_transforms = torchrl.envs.Compose(
+    forward_transforms = [
         # Forward
         torchrl.envs.ToTensorImage(
             in_keys=pixels_keys,
@@ -188,7 +187,7 @@ def arnold_dataset_make_transforms(
             fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
         ),
         torchrl.envs.Resize(observation_shape, in_keys=pixels_keys),
-    )
+    ]
 
     # TODO: This Rename is awkward
     if exclude_next_observation:
@@ -212,16 +211,13 @@ def arnold_dataset_make_transforms(
             )
         )
 
-    return torchrl.envs.Compose(
-        inverse_transforms,
-        forward_transforms,
-    )
+    return [Compose(*inverse_transforms), Compose(*forward_transforms)]
 
 
 def online_env_make_transforms(
     target_return: float | None = None, observation_shape: tuple[int, int] = (224, 224)
 ):
-    t = Compose(
+    t = [
         RenameTransform(in_keys=["screen"], out_keys=["pixels"], create_copy=True),
         ToTensorImage(),
         UnaryTransform(
@@ -234,7 +230,7 @@ def online_env_make_transforms(
             in_keys=["pixels"],
             out_keys=["observation"],
         ),
-    )
+    ]
 
     if target_return is not None:
         t.append(TargetReturn(target_return))
@@ -243,7 +239,7 @@ def online_env_make_transforms(
 
 
 def online_dataset_make_transforms(
-    collector_out_key: str,
+    collector_out_key: str = "action",
     reward_key=("next", "reward"),
     exclude_next_observation: bool = False,
     rtg_key="return_to_go",
@@ -252,7 +248,7 @@ def online_dataset_make_transforms(
         ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
     )
 
-    inverse_transforms = torchrl.envs.Compose(
+    inverse_transforms = [
         # TODO: Naming
         torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
         torchrl.envs.RenameTransform(
@@ -267,18 +263,21 @@ def online_dataset_make_transforms(
             in_keys_inv=[collector_out_key],
         ),
         torchrl.envs.UnaryTransform(
+            in_keys=[],
+            out_keys=[],
             out_keys_inv=pixels_keys,
             in_keys_inv=pixels_keys,
+            fn=lambda t: t,
             inv_fn=lambda t: (255 * t).to(torch.uint8),
         ),
-    )
+    ]
 
     if exclude_next_observation:
         inverse_transforms.append(
             torchrl.envs.ExcludeTransform(("next", "pixels"), inverse=True)
         )
 
-    forward_transforms = torchrl.envs.Compose(
+    forward_transforms = [
         # Forward
         torchrl.envs.ToTensorImage(in_keys=pixels_keys, shape_tolerant=True),
         # TODO: Already apply this for .inv(...)
@@ -293,7 +292,7 @@ def online_dataset_make_transforms(
             out_keys=["target_action"],
             fn=lambda td: td.roll(shifts=-1, dims=-2),
         ),
-    )
+    ]
 
     # TODO: This Rename is awkward
     if exclude_next_observation:
@@ -317,7 +316,7 @@ def online_dataset_make_transforms(
             )
         )
 
-    return torchrl.envs.Compose(
-        inverse_transforms,
-        forward_transforms,
+    return (
+        Compose(*inverse_transforms),
+        Compose(*forward_transforms),
     )

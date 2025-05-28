@@ -1,5 +1,4 @@
 import inspect
-import random
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Iterable, Iterator, Literal
@@ -33,6 +32,7 @@ class DatasetInfo:
     make_dataset_transforms: Callable[..., list] = list
     target_return_scaling_factor: float = 1.5
     method: Literal["offline", "online"] = "offline"
+    guessed_target_return: float | None = None
 
 
 _NUM_ACTIONS = 10
@@ -69,14 +69,33 @@ class DoomStreamingDataModule(LightningDataModule):
         # Needed for state loading
         self._start_index = 0
         self._dataset_start_index = 0
+        
+        self._device = torch.device("cuda:0" if self.pin_memory else "cpu")
 
-    def set_mode(self, method: Literal["offline", "online"], policy: TensorDictModule):
+    def set_mode(self, method: Literal["offline", "online"], policy: TensorDictModule | None):
+        if method == "online":
+            assert policy is not None
+        
         self.method = method
         self.policy = policy
+        
+        if self.policy is not None and hasattr(self.policy, "method"):
+            policy.method = method
 
     def setup(self, stage):
-        datasets = self.available_datasets()
-        for d in datasets:
+        datasets = self._get_datasets()
+        total_length = sum(
+            dataset.max_steps // (self.batch_size * self.batch_traj_len)
+            for dataset in datasets
+        )
+
+        self._dataset = LazyChainDataset(
+            partial(self._dataset_iterator, datasets), total_length=total_length
+        )
+        
+    def _get_datasets(self):
+        datasets = []
+        for d in self.available_datasets():
             if d.method != self.method:
                 continue
 
@@ -87,25 +106,22 @@ class DoomStreamingDataModule(LightningDataModule):
 
             if func is not None and "batch_size" in inspect.getfullargspec(func).args:
                 d.policy_maker = partial(d.policy_maker, batch_size=1)
+                
+            datasets.append(d)
+        
+        return datasets
 
-        total_length = sum(
-            dataset.max_steps // (self.batch_size * self.batch_traj_len)
-            for dataset in datasets
-        )
-
-        self._dataset = LazyChainDataset(
-            partial(self._dataset_iterator, datasets), total_length=total_length
-        )
 
     def _dataset_iterator(
         self, datasets: Iterable[DatasetInfo]
     ) -> Iterator[IterableDataset]:
-        random.shuffle(datasets)
-
         for dataset_info in datasets:
             max_seen_rtg = self.max_seen_rtgs.get(dataset_info.name)
             if max_seen_rtg is not None:
                 max_seen_rtg *= dataset_info.target_return_scaling_factor
+                
+            if self.method == "online" and max_seen_rtg is None and dataset_info.guessed_target_return is not None:
+                max_seen_rtg = dataset_info.guessed_target_return
 
             def make_env_serial():
                 def make_env():
@@ -128,16 +144,15 @@ class DoomStreamingDataModule(LightningDataModule):
             def online_policy():
                 return self.policy
 
-            if dataset_info.policy_maker:
+            if self.method != "online" and dataset_info.policy_maker:
                 policy_maker = dataset_info.policy_maker()
                 torch._dynamo.config.capture_scalar_outputs = True
-                policy = policy_maker()
-                policy = torch.compile(policy)
+                policy = torch.compile(policy_maker)
                 torch._dynamo.config.capture_scalar_outputs = False
             else:
                 policy = online_policy()
-
-            policy = torch.no_grad(policy)
+            
+            assert policy is not None
 
             dataset = GymnasiumStreamingDataset(
                 size=size,
@@ -145,11 +160,10 @@ class DoomStreamingDataModule(LightningDataModule):
                 batch_traj_len=self.batch_traj_len,
                 max_traj_len=dataset_info.max_steps_per_traj,
                 num_trajs=self.num_trajs,
-                num_workers=self.num_workers,
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
                 create_env_fn=make_env_serial,
-                transform=dataset_info.make_dataset_transforms(),
+                transform=Compose(*dataset_info.make_dataset_transforms()),
                 compilable=True,
             )
 
@@ -215,13 +229,16 @@ class DoomStreamingDataModule(LightningDataModule):
                 method="online",
                 policy_maker=None,  # Can be none, since it's online and the policy is replaced.
                 create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
-                make_env_transforms=online_env_make_transforms,
+                make_env_transforms=partial(
+                    online_env_make_transforms, observation_shape=(224, 224)
+                ),
                 make_dataset_transforms=partial(
                     online_dataset_make_transforms,
-                    observation_shape=(224, 224),
                     rtg_key="target_return",
+                    collector_out_key="action",
                 ),
                 max_steps=250_000,
                 max_steps_per_traj=500,
+                guessed_target_return=300.,
             ),
         ]

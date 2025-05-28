@@ -46,6 +46,7 @@ def main():
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,
         target_key="target_action",
+        rtg_key="target_return",
         # lr=5e-4,
         lr=1e-2,
         accumulate_grad_batches=accumulate_grad_batches,
@@ -54,18 +55,16 @@ def main():
     datamodule = DoomStreamingDataModule(
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
-        num_workers=3,
+        # num_workers=3,s
         num_trajs=2,
     )
     
     # Offline training
-    model.method = "offline"
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule)
     
     # Online training
-    model.method = "online"
-    datamodule.set_mode("online", None)
+    datamodule.set_mode("online", model)
     trainer.fit(model, datamodule=datamodule)
 
 if __name__ == "__main__":

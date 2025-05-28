@@ -26,7 +26,6 @@ class GymnasiumStreamingDataset(
         num_trajs: int,
         policy: torch.nn.Module,
         create_env_fn: Callable | torchrl.envs.EnvCreator,
-        num_workers: int | None = None,
         reward_key=("next", "reward"),
         compilable: bool = True,
         transform: torchrl.envs.Transform | None = None,
@@ -40,7 +39,6 @@ class GymnasiumStreamingDataset(
         self.num_slices = batch_size
         self.max_steps = size
         self.create_env_fn = create_env_fn
-        self.num_workers = num_workers
         self.policy = policy
         self._max_seen_rtg = max_seen_rtg
         self.storage_size = storage_size
