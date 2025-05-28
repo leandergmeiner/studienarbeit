@@ -278,6 +278,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 loss["loss_log_likelihood"] + loss["loss_entropy"]
             ) / self.accumulate_grad_batches
             self.manual_backward(loss_value)
+            self.clip_gradients(opt, gradient_clip_val=0.25, gradient_clip_algorithm="norm")
 
         with opt.toggle_model(sync_grad=accumulated_grad_batches):
             opt.step(closure=closure_loss)
@@ -528,11 +529,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 "microsoft/resnet-50", hidden_size
             )
 
-        # spatial_encoder = spatial_encoder.train()
+        spatial_encoder = spatial_encoder.train()
 
-        spatial_encoder = spatial_encoder.eval()
-        if model_type == "transformer":
-            spatial_encoder.patching.train()
+        # spatial_encoder = spatial_encoder.eval()
+        # if model_type == "transformer":
+        #     spatial_encoder.patching.train()
         
         # If frame_skip > 1 only every frame_skip'th action and reward is passed to the
         # transformer, since the observations are shrunken by a factor of frame_skip

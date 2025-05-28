@@ -42,6 +42,7 @@ optimum = {extras = ["onnxruntime-gpu"], version = "^1.25.0"}
 onnxruntime = "^1.22.0"
 onnx = "^1.18.0"
 timm = "^1.0.15"
+captum = "^0.8.0"
 
 
 [build-system]

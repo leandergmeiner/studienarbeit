@@ -1,3 +1,4 @@
+import inspect
 import random
 from copy import deepcopy
 from dataclasses import dataclass
@@ -9,13 +10,15 @@ import torch
 from lightning import LightningDataModule
 from tensordict.nn import TensorDictModule
 from torch.utils.data import DataLoader, IterableDataset
-from torchrl.envs import Compose, GymEnv, SerialEnv, TargetReturn, TransformedEnv
+from torchrl.envs import Compose, GymEnv, SerialEnv, TransformedEnv
 
 from pretrained.models import ArnoldAgent
 from src.data.streaming import GymnasiumStreamingDataset, LazyChainDataset
 from src.data.transforms import (
     arnold_dataset_make_transforms,
     arnold_env_make_transforms,
+    online_env_make_transforms,
+    online_dataset_make_transforms,
 )
 
 
@@ -29,6 +32,7 @@ class DatasetInfo:
     make_env_transforms: Callable[..., list] = list
     make_dataset_transforms: Callable[..., list] = list
     target_return_scaling_factor: float = 1.5
+    method: Literal["offline", "online"] = "offline"
 
 
 _DOOM_DATASETS = [
@@ -46,21 +50,19 @@ _DOOM_DATASETS = [
         max_steps=1_000_000,
         max_steps_per_traj=500,
     ),
-    # DatasetInfo(
-    #     name="health_gathering",
-    #     policy_maker=partial(ArnoldAgent, "health_gathering"),
-    #     create_env_fn=partial(make_env, "sa/ArnoldHealthGathering-v0"),
-    #     size=1_000_000,
-    #     max_steps_per_traj=500,  # TODO
-    # ),
-    # FIXME
-    # DatasetInfo(
-    #     name="shotgun",
-    #     policy_maker=partial(ArnoldAgent, "shotgun"),
-    #     create_env_fn=partial(make_env, "sa/ArnoldShotgun-v0"),
-    #     size=1_000_000,
-    #     max_steps_per_traj=750,  # TODO
-    # ),
+    DatasetInfo(
+        name="defend_the_center",
+        method="online",
+        policy_maker=None,  # Online
+        create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
+        # TODO:
+        make_env_transforms=online_env_make_transforms,
+        make_dataset_transforms=partial(
+            online_dataset_make_transforms, observation_shape=(224, 224)
+        ),
+        max_steps=250_000,
+        max_steps_per_traj=500,
+    ),
 ]
 _NUM_ACTIONS = 10
 # _FRAME_SKIP = 4  # TODO: This number is not enforced
@@ -104,14 +106,15 @@ class DoomStreamingDataModule(LightningDataModule):
     def setup(self, stage):
         # self.stage = stage
         datasets = deepcopy(_DOOM_DATASETS)
+        datasets = filter(lambda d: d.method == self.method, datasets)
         for d in datasets:
-            if stage != "fit" or self.method == "online":
-                d.policy_maker = lambda: self.policy
+            if isinstance(d.policy_maker, partial):
+                func = d.policy_maker.func
             else:
-                # TODO: This is whack and only specific to Arnold Models
-                d.policy_maker = partial(
-                    d.policy_maker, batch_size=self.num_workers or 1
-                )
+                func = d.policy_maker
+
+            if "batch_size" in inspect.getfullargspec(func).args:
+                d.policy_maker = partial(d.policy_maker, batch_size=1)
 
         total_length = sum(
             dataset.max_steps // (self.batch_size * self.batch_traj_len)
@@ -135,24 +138,33 @@ class DoomStreamingDataModule(LightningDataModule):
                 def make_env():
                     env = dataset_info.create_env_fn()
                     wrapped = TransformedEnv(
-                        env, Compose(*dataset_info.make_env_transforms())
+                        env,
+                        Compose(
+                            *dataset_info.make_env_transforms(
+                                target_return=max_seen_rtg
+                            )
+                        ),
                     )
-                    if max_seen_rtg is not None:
-                        wrapped.append_transform(TargetReturn(max_seen_rtg))
-
                     return wrapped
-                    
+
                 return SerialEnv(1, make_env)
-            
 
             # _dataset_start_index is not 0 if we loaded from a state dict
             size = dataset_info.max_steps - self._dataset_start_index
 
-            torch._dynamo.config.capture_scalar_outputs = True
-            # TODO: Make policy random somehow
-            policy = dataset_info.policy_maker()
-            policy = torch.compile(policy)
-            torch._dynamo.config.capture_scalar_outputs = False
+            def online_policy():
+                return self.policy
+
+            if dataset_info.policy_maker:
+                policy_maker = dataset_info.policy_maker()
+                torch._dynamo.config.capture_scalar_outputs = True
+                policy = policy_maker()
+                policy = torch.compile(policy)
+                torch._dynamo.config.capture_scalar_outputs = False
+            else:
+                policy = online_policy()
+
+            policy = torch.no_grad(policy)
 
             dataset = GymnasiumStreamingDataset(
                 size=size,
@@ -189,10 +201,6 @@ class DoomStreamingDataModule(LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         return self._dataloader()
-
-    def teardown(self, stage):
-        del self._dataset
-        del self.current_dataset
 
     @property
     def batch_size(self):

@@ -8,11 +8,6 @@ from src.data.dataset import DoomStreamingDataModule
 from src.modules import LightningDecisionTransformer
 
 # %%
-
-# TODO: Use FuseLAMB (Large Batch Optimization for Deep Learning: Training BERT in 76 minutes)
-# TODO: Use OnlineDTLoss
-# TODO: Tublets, how to report the final reward? Sum should work well.
-
 # This line is needed for some reason to prevent misalignement issues.
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
@@ -53,7 +48,8 @@ def main():
         num_actions=DoomStreamingDataModule.NUM_ACTIONS,
         inference_context=inference_context,
         target_key="target_action",
-        lr=5e-4,
+        # lr=5e-4,
+        lr=1e-2,
         accumulate_grad_batches=accumulate_grad_batches,
     )
     
