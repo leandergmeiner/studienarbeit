@@ -108,9 +108,12 @@ class DoomStreamingDataModule(LightningDataModule):
         self.policy = policy
 
     def setup(self, stage):
-        # self.stage = stage
         datasets = deepcopy(_DOOM_DATASETS)
-        datasets = filter(lambda d: d.method == self.method, datasets)
+        
+        def filter_func(dataset_info: DatasetInfo):
+            return dataset_info.method == self.method
+        
+        datasets = filter(filter_func, datasets)
         for d in datasets:
             if isinstance(d.policy_maker, partial):
                 func = d.policy_maker.func
