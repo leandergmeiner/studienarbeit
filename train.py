@@ -48,7 +48,7 @@ def main():
         target_key="target_action",
         rtg_key="target_return",
         # lr=5e-4,
-        lr=1e-2,
+        lr=5e-3,
         accumulate_grad_batches=accumulate_grad_batches,
     )
     

@@ -325,7 +325,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=3000
+            optimizer, T_0=3000, eta_min=lr / 100
         )
 
         optim_config = {
