@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Iterable, Iterator, Literal
 
+import dill  # noqa: F401
 import numpy as np
 import torch
 from lightning import LightningDataModule
@@ -17,8 +18,8 @@ from src.data.streaming import GymnasiumStreamingDataset, LazyChainDataset
 from src.data.transforms import (
     arnold_dataset_make_transforms,
     arnold_env_make_transforms,
-    online_env_make_transforms,
     online_dataset_make_transforms,
+    online_env_make_transforms,
 )
 
 
