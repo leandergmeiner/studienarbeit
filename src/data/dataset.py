@@ -1,6 +1,5 @@
 import inspect
 import random
-from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Iterable, Iterator, Literal
@@ -36,38 +35,6 @@ class DatasetInfo:
     method: Literal["offline", "online"] = "offline"
 
 
-_DOOM_DATASETS = [
-    DatasetInfo(
-        name="defend_the_center",
-        policy_maker=partial(ArnoldAgent, "defend_the_center"),
-        create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
-        make_env_transforms=arnold_env_make_transforms,
-        make_dataset_transforms=partial(
-            arnold_dataset_make_transforms,
-            observation_shape=(224, 224),
-            exclude_next_observation=True,
-            collector_out_key="action",
-            rtg_key="target_return",
-        ),
-        max_steps=1_000_000,
-        max_steps_per_traj=500,
-    ),
-    DatasetInfo(
-        name="defend_the_center",
-        method="online",
-        policy_maker=None,  # Online
-        create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
-        # TODO:
-        make_env_transforms=online_env_make_transforms,
-        make_dataset_transforms=partial(
-            online_dataset_make_transforms,
-            observation_shape=(224, 224),
-            rtg_key="target_return",
-        ),
-        max_steps=250_000,
-        max_steps_per_traj=500,
-    ),
-]
 _NUM_ACTIONS = 10
 # _FRAME_SKIP = 4  # TODO: This number is not enforced
 
@@ -95,7 +62,7 @@ class DoomStreamingDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.num_trajs = num_trajs or batch_size
         self.policy = policy
-        self.method: Literal["offline", "online"] = method
+        self.method = method
         self.pin_memory = pin_memory
         self.max_seen_rtgs = max_seen_rtgs or {}
 
@@ -108,25 +75,24 @@ class DoomStreamingDataModule(LightningDataModule):
         self.policy = policy
 
     def setup(self, stage):
-        datasets = deepcopy(_DOOM_DATASETS)
-        
-        def filter_func(dataset_info: DatasetInfo):
-            return dataset_info.method == self.method
-        
-        datasets = filter(filter_func, datasets)
+        datasets = self.available_datasets()
         for d in datasets:
+            if d.method != self.method:
+                continue
+
             if isinstance(d.policy_maker, partial):
                 func = d.policy_maker.func
             else:
                 func = d.policy_maker
 
-            if "batch_size" in inspect.getfullargspec(func).args:
+            if func is not None and "batch_size" in inspect.getfullargspec(func).args:
                 d.policy_maker = partial(d.policy_maker, batch_size=1)
 
         total_length = sum(
             dataset.max_steps // (self.batch_size * self.batch_traj_len)
             for dataset in datasets
         )
+
         self._dataset = LazyChainDataset(
             partial(self._dataset_iterator, datasets), total_length=total_length
         )
@@ -224,3 +190,38 @@ class DoomStreamingDataModule(LightningDataModule):
         self._start_index = state_dict["index"]
         self._dataset_start_index = state_dict["dataset_index"]
         self.max_seen_rtgs = state_dict["max_seen_rtgs"]
+
+    @staticmethod
+    def available_datasets():
+        return [
+            DatasetInfo(
+                name="defend_the_center",
+                method="offline",
+                policy_maker=partial(ArnoldAgent, "defend_the_center"),
+                create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
+                make_env_transforms=arnold_env_make_transforms,
+                make_dataset_transforms=partial(
+                    arnold_dataset_make_transforms,
+                    observation_shape=(224, 224),
+                    exclude_next_observation=True,
+                    collector_out_key="action",
+                    rtg_key="target_return",
+                ),
+                max_steps=1_000_000,
+                max_steps_per_traj=500,
+            ),
+            DatasetInfo(
+                name="defend_the_center",
+                method="online",
+                policy_maker=None,  # Can be none, since it's online and the policy is replaced.
+                create_env_fn=partial(GymEnv, "sa/ArnoldDefendCenter-v0"),
+                make_env_transforms=online_env_make_transforms,
+                make_dataset_transforms=partial(
+                    online_dataset_make_transforms,
+                    observation_shape=(224, 224),
+                    rtg_key="target_return",
+                ),
+                max_steps=250_000,
+                max_steps_per_traj=500,
+            ),
+        ]

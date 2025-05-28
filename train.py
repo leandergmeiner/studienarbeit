@@ -28,7 +28,7 @@ def main():
     logger = TensorBoardLogger("logs/", model_type, default_hp_metric=False)
     trainer = Trainer(
         # precision="bf16-true",
-        max_epochs=10,
+        max_epochs=2,
         log_every_n_steps=1,
         logger=logger,
         callbacks=[
