@@ -315,20 +315,20 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         tensordict.batch_size = tensordict.batch_size[:-1]
         return tensordict
 
-    def validation_step(self, batch: TensorDict):
-        # Batch is taken from an online rollout
-        # So here we just need to calculate the metrics.
-        if batch.batch_dims == 0:
-            batch = batch[None, None, ...]
-        elif batch.batch_dims == 1:
-            batch = batch[None, ...]
+    # def validation_step(self, batch: TensorDict):
+    #     # Batch is taken from an online rollout
+    #     # So here we just need to calculate the metrics.
+    #     if batch.batch_dims == 0:
+    #         batch = batch[None, None, ...]
+    #     elif batch.batch_dims == 1:
+    #         batch = batch[None, ...]
         
-        assert batch.batch_dims == 2
+    #     assert batch.batch_dims == 2
         
-        reward = batch[("next", "reward")]
-        max_rewards = torch.stack(torch.max(t) for t in reward.unbind(0))
-        mean_max_reward = torch.mean(max_rewards)
-        self.log("reward", mean_max_reward)
+    #     reward = batch[("next", "reward")]
+    #     max_rewards = torch.stack(torch.max(t) for t in reward.unbind(0))
+    #     mean_max_reward = torch.mean(max_rewards)
+    #     self.log("reward", mean_max_reward)
 
     def configure_optimizers(self):
         lr = self.lr or self.learning_rate
