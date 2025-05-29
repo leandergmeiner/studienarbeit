@@ -210,10 +210,10 @@ class DoomStreamingDataModule(LightningDataModule):
         for dataset in self._make_validation_datasets():
             yield next(dataset.collector())
 
-    def val_dataloader(self):
-        return DataLoader(
-            self._val_dataset_iterator(), collate_fn=torch.cat, in_order=False
-        )
+    # def val_dataloader(self):
+    #     return DataLoader(
+    #         self._val_dataset_iterator(), collate_fn=torch.cat, in_order=False
+    #     )
 
     @property
     def batch_size(self):
