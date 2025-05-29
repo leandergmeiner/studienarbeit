@@ -275,7 +275,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             if accumulated_grad_batches:
                 opt.zero_grad()
             loss_value: torch.Tensor = (
-                loss["loss_log_likelihood"] + loss["loss_entropy"]
+                loss["loss_log_likelihood"].nan_to_num() + loss["loss_entropy"].nan_to_num()
             ) / self.accumulate_grad_batches
             self.manual_backward(loss_value)
             self.clip_gradients(opt, gradient_clip_val=0.25, gradient_clip_algorithm="norm")
