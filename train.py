@@ -1,4 +1,6 @@
 # %%
+from pathlib import Path
+
 import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
@@ -25,17 +27,25 @@ def main():
         accumulate_grad_batches = 32
         max_batch_size_in_mem = 2
 
-    logger = TensorBoardLogger("logs/", model_type, default_hp_metric=False)
+    logger = TensorBoardLogger(
+        "rsrc", model_type, sub_dir="logs", default_hp_metric=False
+    )
     trainer = Trainer(
         # precision="bf16-true",
-        max_epochs=2,
-        log_every_n_steps=1,
+        max_epochs=3,
+        log_every_n_steps=50,
+        val_check_interval=1000,
+        check_val_every_n_epoch=None,
+        num_sanity_val_steps=0,
         logger=logger,
         callbacks=[
             ModelCheckpoint(
                 save_last=True,
-                dirpath=f"models/{model_type}",
-                every_n_train_steps=200,  # Actually every batch_size // max_batch_size_in_mem iterations
+                save_top_k=-1,
+                save_on_train_epoch_end=True,
+                # 2* since we call .step of the two optimizers
+                every_n_train_steps=1000 * 2,
+                dirpath=Path(logger.root_dir) / "models",
             ),
             # StochasticWeightAveraging(swa_lrs=1e-2),
         ],
@@ -51,21 +61,22 @@ def main():
         lr=5e-3,
         accumulate_grad_batches=accumulate_grad_batches,
     )
-    
+
     datamodule = DoomStreamingDataModule(
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
         num_workers=3,
         num_trajs=2,
     )
-    
+
     # Offline training
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule)
-    
+
     # Online training
     datamodule.set_mode("online", model)
     trainer.fit(model, datamodule=datamodule)
+
 
 if __name__ == "__main__":
     main()

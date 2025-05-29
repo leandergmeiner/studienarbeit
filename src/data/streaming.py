@@ -126,6 +126,9 @@ class GymnasiumStreamingDataset(
         collector.shutdown()
 
     def collector(self):
+        if hasattr(self.policy, "reset") and callable(self.policy.reset):
+            self.policy.reset()
+
         return SyncDataCollector(
             self.create_env_fn,
             policy=self.policy,

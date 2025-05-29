@@ -73,7 +73,8 @@ model.to(device)
 
 print("Starting rollout")
 
-td = env.rollout(steps, model)
+with torch.no_grad():
+    td = env.rollout(steps, model)
 env.transform.dump()
 
 # We need to do a manual rollout, since env.rollout does not
