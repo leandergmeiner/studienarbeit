@@ -80,7 +80,7 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
             },
             batch_size=[],
         )
-        
+
         tensordict = self.cat_frames_obs._call(tensordict)
         tensordict = self.cat_frames_other._call(tensordict)
 
@@ -275,10 +275,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             if accumulated_grad_batches:
                 opt.zero_grad()
             loss_value: torch.Tensor = (
-                loss["loss_log_likelihood"].nan_to_num() + loss["loss_entropy"].nan_to_num()
+                loss["loss_log_likelihood"].nan_to_num()
+                + loss["loss_entropy"].nan_to_num()
             ) / self.accumulate_grad_batches
             self.manual_backward(loss_value)
-            self.clip_gradients(opt, gradient_clip_val=0.25, gradient_clip_algorithm="norm")
+            self.clip_gradients(
+                opt, gradient_clip_val=0.25, gradient_clip_algorithm="norm"
+            )
 
         with opt.toggle_model(sync_grad=accumulated_grad_batches):
             opt.step(closure=closure_loss)
@@ -322,9 +325,9 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     #         batch = batch[None, None, ...]
     #     elif batch.batch_dims == 1:
     #         batch = batch[None, ...]
-        
+
     #     assert batch.batch_dims == 2
-        
+
     #     reward = batch[("next", "reward")]
     #     max_rewards = torch.stack(torch.max(t) for t in reward.unbind(0))
     #     mean_max_reward = torch.mean(max_rewards)
@@ -510,7 +513,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             "offline": InteractionType.DETERMINISTIC,
         }
         return interaction_type_mapping[self.method]
-    
+
     def reset(self):
         self.inference_actor.reset()
 
@@ -549,7 +552,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # spatial_encoder = spatial_encoder.eval()
         # if model_type == "transformer":
         #     spatial_encoder.patching.train()
-        
+
         # If frame_skip > 1 only every frame_skip'th action and reward is passed to the
         # transformer, since the observations are shrunken by a factor of frame_skip
         # To keep actual context size equal, we perform some scaling.
