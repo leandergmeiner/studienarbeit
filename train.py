@@ -31,7 +31,6 @@ def main():
         "rsrc", model_type, sub_dir="logs", default_hp_metric=False
     )
     trainer = Trainer(
-        # precision="bf16-true",
         max_epochs=3,
         log_every_n_steps=50,
         val_check_interval=2000,

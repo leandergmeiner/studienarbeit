@@ -337,7 +337,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         lr = self.lr or self.learning_rate
 
         optimizer = Lamb(
-            self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True
+            self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True, always_adapt=True,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, T_0=3000, eta_min=lr / 100
