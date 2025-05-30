@@ -214,16 +214,8 @@ class DoomStreamingDataModule(LightningDataModule):
 
     def val_dataloader(self):
         for dataset in self._make_validation_datasets():
-            env = dataset.create_env_fn()
-            tds = []
-            for _ in range(3):
-                td = env.rollout(dataset.max_traj_len)
-                del td["observation"] # TODO: This is whack
-                del td[("next", "observation")] # TODO: This is whack
-                tds.append(td)
-                
-            yield torch.stack(tuple(tds))
-                
+            yield next(dataset.collector().iterator())
+            
     def state_dict(self):
         return {
             "index": self._start_index,
