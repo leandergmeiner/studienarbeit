@@ -214,7 +214,10 @@ class DoomStreamingDataModule(LightningDataModule):
 
     def val_dataloader(self):
         for dataset in self._make_validation_datasets():
-            yield next(dataset.collector().iterator())
+            td = next(dataset.collector().iterator())
+            del td["observation"] # TODO: This is whack
+            del td[("next", "observation")] # TODO: This is whack
+            yield td
             
     def state_dict(self):
         return {
