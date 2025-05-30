@@ -46,18 +46,18 @@ class DoomStreamingDataModule(LightningDataModule):
     def __init__(
         self,
         policy: TensorDictModule,
-        method: Literal["offline", "online"] = "offline",
-        batch_size: int | None = None,
+        batch_size: int,
         batch_traj_len: int = 64,
+        method: Literal["offline", "online"] = "offline",
         num_workers: int = 0,
         num_trajs: int = 0,
         max_seen_rtgs: dict[str, np.float64] | None = None,
         pin_memory=torch.cuda.is_available(),
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["policy"])
+        self.save_hyperparameters(ignore=["policy", "pin_memory"])
 
-        self._batch_size = batch_size
+        self.batch_size = batch_size
         self.batch_traj_len = batch_traj_len
         self.num_workers = num_workers
         self.num_trajs = num_trajs or batch_size
@@ -93,7 +93,9 @@ class DoomStreamingDataModule(LightningDataModule):
             )
 
             self._make_validation_datasets = partial(
-                self._dataset_iterator, self._get_datasets(), method="online"
+                self._dataset_iterator,
+                self._get_datasets(method="online"),
+                method="online",
             )
 
             self._train_dataset = LazyChainDataset(
@@ -103,10 +105,14 @@ class DoomStreamingDataModule(LightningDataModule):
             self._make_validation_datasets = None
             self._train_dataset = None
 
-    def _get_datasets(self) -> list[DatasetInfo]:
+    def _get_datasets(
+        self, method: Literal["offline", "online"] | None = None
+    ) -> list[DatasetInfo]:
+        method = method or self.method
+
         datasets = []
         for d in self.available_datasets():
-            if d.method != self.method:
+            if d.method != method:
                 continue
 
             if isinstance(d.policy_maker, partial):
@@ -169,7 +175,7 @@ class DoomStreamingDataModule(LightningDataModule):
             else:
                 policy = online_policy()
 
-            assert policy is not None
+            # assert policy is not None
 
             dataset = GymnasiumStreamingDataset(
                 size=size,
@@ -206,19 +212,18 @@ class DoomStreamingDataModule(LightningDataModule):
             pin_memory_device="cuda:0" if self.pin_memory else None,
         )
 
-    def _val_dataset_iterator(self):
+    def val_dataloader(self):
         for dataset in self._make_validation_datasets():
-            yield next(dataset.collector())
-
-    # def val_dataloader(self):
-    #     return DataLoader(
-    #         self._val_dataset_iterator(), collate_fn=torch.cat, in_order=False
-    #     )
-
-    @property
-    def batch_size(self):
-        return self._batch_size | self.hparams.batch_size
-
+            env = dataset.create_env_fn()
+            tds = []
+            for _ in range(3):
+                td = env.rollout(dataset.max_traj_len)
+                del td["observation"] # TODO: This is whack
+                del td[("next", "observation")] # TODO: This is whack
+                tds.append(td)
+                
+            yield torch.stack(tuple(tds))
+                
     def state_dict(self):
         return {
             "index": self._start_index,

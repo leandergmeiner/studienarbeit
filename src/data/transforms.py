@@ -218,7 +218,7 @@ def online_env_make_transforms(
     target_return: float | None = None, observation_shape: tuple[int, int] = (224, 224)
 ):
     t = [
-        RenameTransform(in_keys=["screen"], out_keys=["pixels"], create_copy=True),
+        RenameTransform(in_keys=["screen"], out_keys=["pixels"]),
         ToTensorImage(),
         UnaryTransform(
             in_keys=["pixels"],

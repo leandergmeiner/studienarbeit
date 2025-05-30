@@ -24,12 +24,12 @@ class GymnasiumStreamingDataset(
         batch_traj_len: int,
         max_traj_len: int,
         num_trajs: int,
-        policy: torch.nn.Module,
+        policy: torch.nn.Module | None,
         create_env_fn: Callable | torchrl.envs.EnvCreator,
         reward_key=("next", "reward"),
         compilable: bool = True,
         transform: torchrl.envs.Transform | None = None,
-        max_seen_rtg: float | None = None
+        max_seen_rtg: float | None = None,
     ):
         assert max_traj_len >= batch_traj_len
 
@@ -89,7 +89,6 @@ class GymnasiumStreamingDataset(
             compilable=True,
         )
 
-
     def __iter__(self) -> Iterator[TensorDict]:
         collector = self.collector()
         collect_iterator: Iterator[TensorDict] = collector.iterator()
@@ -126,7 +125,11 @@ class GymnasiumStreamingDataset(
         collector.shutdown()
 
     def collector(self):
-        if hasattr(self.policy, "reset") and callable(self.policy.reset):
+        if (
+            self.policy is not None
+            and hasattr(self.policy, "reset")
+            and callable(self.policy.reset)
+        ):
             self.policy.reset()
 
         return SyncDataCollector(
