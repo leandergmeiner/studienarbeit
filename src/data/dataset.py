@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from lightning import LightningDataModule
 from tensordict.nn import TensorDictModule
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from torchrl.envs import Compose, GymEnv, SerialEnv, TransformedEnv
 
 from pretrained.models import ArnoldAgent
@@ -211,13 +211,17 @@ class DoomStreamingDataModule(LightningDataModule):
             pin_memory=self.pin_memory,
             pin_memory_device="cuda:0" if self.pin_memory else None,
         )
+        
+    # def _val_dataset_iterator(self):
+    #     for dataset in self._make_validation_datasets():
+    #         td = next(dataset.collector().iterator())
+    #         del td["observation"] # TODO: This is whack
+    #         del td[("next", "observation")] # TODO: This is whack
+    #         yield td
 
-    def val_dataloader(self):
-        for dataset in self._make_validation_datasets():
-            td = next(dataset.collector().iterator())
-            del td["observation"] # TODO: This is whack
-            del td[("next", "observation")] # TODO: This is whack
-            yield td
+    # def val_dataloader(self):            
+    #     return LazyChainDataset(self._val_dataset_iterator)
+            
             
     def state_dict(self):
         return {
