@@ -262,7 +262,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # FIXME: Use (collector, mask) for gradient computation
 
         # Update temperature for distribution
-        self.actor[1].distribution_kwargs.update(
+        self.actor[-2].distribution_kwargs.update(
             temperature=torch.tensor(float(self.temperature))
         )
 
