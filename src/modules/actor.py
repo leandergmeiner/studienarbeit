@@ -262,9 +262,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # FIXME: Use (collector, mask) for gradient computation
 
         # Update temperature for distribution
-        self.actor[-2].distribution_kwargs.update(
-            temperature=torch.tensor(float(self.temperature))
-        )
+        self.actor[-2].distribution_kwargs.update(temperature=self.temperature.detach())
 
         with set_interaction_type(self._training_interaction_type):
             loss = self.loss_module(batch)
@@ -275,8 +273,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             if accumulated_grad_batches:
                 opt.zero_grad()
             loss_value: torch.Tensor = (
-                loss["loss_log_likelihood"]
-                + loss["loss_entropy"]
+                loss["loss_log_likelihood"] + loss["loss_entropy"]
             ) / self.accumulate_grad_batches
             self.manual_backward(loss_value)
             self.clip_gradients(
@@ -337,7 +334,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         lr = self.lr or self.learning_rate
 
         optimizer = Lamb(
-            self.parameters(), lr=lr, weight_decay=5e-4, grad_averaging=True, always_adapt=True,
+            self.parameters(),
+            lr=lr,
+            weight_decay=5e-4,
+            grad_averaging=True,
+            always_adapt=True,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, T_0=3000, eta_min=lr / 100
@@ -383,12 +384,12 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             ),
             SafeProbabilisticModule(
                 in_keys=["logits"],
-                out_keys=["probs"],
+                out_keys=[self.out_action_key],
                 distribution_class=torch.distributions.RelaxedOneHotCategorical,
-                distribution_kwargs=dict(temperature=self.init_temperature)
+                distribution_kwargs=dict(temperature=self.init_temperature),
             ),
             SafeProbabilisticModule(
-                in_keys=["probs"],
+                in_keys=["logits"],
                 out_keys=[self.out_action_key],
                 distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
             ),
@@ -424,12 +425,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             self.training_actor,
             target_entropy=target_entropy,
             alpha_init=self.init_temperature,
-            max_alpha=1.5 * self.init_temperature,
         )
         loss_module.set_keys(
             action_pred=self.out_action_key, action_target=self.target_key
         )
         self.loss_module = loss_module
+
+        print("temperature", self.temperature)
 
     def set_tensor_keys(
         self,
