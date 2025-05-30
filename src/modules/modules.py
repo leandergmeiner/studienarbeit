@@ -150,7 +150,7 @@ class OnlineDTActor(torch.nn.Module):
             log_std + 1.0
         )
         std = log_std.exp()
-
+        
         return mu, std
 
 
@@ -216,9 +216,7 @@ class SpatialTransformerEncoderWrapper(torch.nn.Module):
         from src.modules.conv import PatchEmbedding
 
         super().__init__()
-        model = AutoModel.from_pretrained(
-            model_name_or_path, add_pooling_layer=False
-        )
+        model = AutoModel.from_pretrained(model_name_or_path, add_pooling_layer=False)
 
         self.encoder = model.encoder
 

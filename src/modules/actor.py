@@ -262,12 +262,12 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # FIXME: Use (collector, mask) for gradient computation
 
         # Update temperature for distribution
-        # self.actor[-1].distribution_kwargs.update(
-        #     temperature=torch.tensor(float(self.temperature))
-        # )
+        self.actor[1].distribution_kwargs.update(
+            temperature=torch.tensor(float(self.temperature))
+        )
 
-        # with set_interaction_type(self._training_interaction_type):
-        loss = self.loss_module(batch)
+        with set_interaction_type(self._training_interaction_type):
+            loss = self.loss_module(batch)
 
         accumulated_grad_batches = batch_idx % self.accumulate_grad_batches == 0
 
@@ -384,6 +384,12 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             ),
             SafeProbabilisticModule(
                 in_keys=["logits"],
+                out_keys=["probs"],
+                distribution_class=torch.distributions.RelaxedOneHotCategorical,
+                distribution_kwargs=dict(temperature=self.init_temperature)
+            ),
+            SafeProbabilisticModule(
+                in_keys=["probs"],
                 out_keys=[self.out_action_key],
                 distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
             ),
