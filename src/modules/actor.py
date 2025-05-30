@@ -331,7 +331,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         reward = batch[("next", "reward")]
         max_rewards = torch.stack(tuple(torch.max(t) for t in reward.unbind(0)))
         mean_max_reward = torch.mean(max_rewards)
-        self.log("reward", mean_max_reward)
+        self.log("reward", mean_max_reward, on_step=True)
 
     def configure_optimizers(self):
         lr = self.lr or self.learning_rate

@@ -34,7 +34,7 @@ def main():
         # precision="bf16-true",
         max_epochs=3,
         log_every_n_steps=50,
-        val_check_interval=1000,
+        val_check_interval=2000,
         check_val_every_n_epoch=None,
         num_sanity_val_steps=0,
         logger=logger,
