@@ -71,11 +71,11 @@ def main():
 
     # Offline training
     datamodule.set_mode("offline", None)
-    trainer.fit(model, datamodule=datamodule)
+    trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
     # Online training
     datamodule.set_mode("online", model)
-    trainer.fit(model, datamodule=datamodule)
+    trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
 
 if __name__ == "__main__":
