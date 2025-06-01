@@ -245,8 +245,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     def forward(self, tensordict: TensorDict) -> TensorDict:
         out = self.inference_actor(tensordict)
         action_id: torch.Tensor = out[self.out_action_key]
-        action_id = torch.multinomial(action_id.softmax(dim=-1), 1)
-        out[self.out_action_key] = action_id
+        action_id = action_id.argmax(dim=-1)
+        out[self.out_action_key] = torch.nn.functional.one_hot(action_id, self.num_actions)
         return out
 
     @dispatch
@@ -386,6 +386,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 in_keys=["loc", "scale"],
                 out_keys=[self.out_action_key],
                 distribution_class=TanhNormal,
+                distribution_kwargs=dict(low=0., high=1.)
             ),
             # SafeProbabilisticModule(
             #     in_keys=["logits"],
@@ -429,8 +430,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             action_pred=self.out_action_key, action_target=self.target_key
         )
         self.loss_module = loss_module
-
-        print("temperature", self.temperature)
 
     def set_tensor_keys(
         self,
