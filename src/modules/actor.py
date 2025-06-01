@@ -473,9 +473,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     def state_dict(self):
         state_dict = super().state_dict()
+        
+        skip_keys = ["_inference_actor", "_training_actor", "loss_module"]
 
         # Avoid saving the model multiple times, since its included in each actor
-        return {k: v for k, v in state_dict.items() if "actor" not in k.split(".")[0]}
+        return {k: v for k, v in state_dict.items() if k.split(".")[0] not in skip_keys}
 
     def load_state_dict(self, state_dict, strict=True, assign=False):
         super().load_state_dict(state_dict, False, assign)
