@@ -59,7 +59,7 @@ env = TransformedEnv(env, t)
 print("Loading model")
 
 model = LightningDecisionTransformer.load_from_checkpoint(
-    f"models/{model_type}/last.ckpt",
+    f"rsrc/{model_type}/models/last.ckpt",
     model_type=model_type,
     # frame_skip=DoomStreamingDataModule.FRAME_SKIP,
     frame_skip=1,
