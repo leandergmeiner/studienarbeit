@@ -144,8 +144,9 @@ class GymnasiumStreamingDataset(
             # therefore we can always reuse the same tensordict
             return_same_td=True,
             compile_policy=self.compilable,
-            device="cpu",
-            policy_device=getattr(self.policy, "device", None),
+            trust_policy=True,
+            # device="cpu",
+            # policy_device=getattr(self.policy, "device", None),
         )
 
     @property
