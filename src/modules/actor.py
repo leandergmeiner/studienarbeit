@@ -386,7 +386,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 in_keys=["loc", "scale"],
                 out_keys=[self.out_action_key],
                 distribution_class=TanhNormal,
-                distribution_kwargs=dict(low=0., high=1.)
             ),
             # SafeProbabilisticModule(
             #     in_keys=["logits"],
