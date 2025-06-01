@@ -166,13 +166,11 @@ class DoomStreamingDataModule(LightningDataModule):
             size = dataset_info.max_steps - self._dataset_start_index
 
             def online_policy():
-                return self.policy
+                return torch.compile(self.policy)
 
             if method != "online" and dataset_info.policy_maker:
-                policy_maker = dataset_info.policy_maker()
-                torch._dynamo.config.capture_scalar_outputs = True
-                policy = torch.compile(policy_maker)
-                torch._dynamo.config.capture_scalar_outputs = False
+                policy = dataset_info.policy_maker()
+                policy = torch.compile(policy)
             else:
                 policy = online_policy()
 

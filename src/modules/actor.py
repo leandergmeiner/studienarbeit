@@ -331,7 +331,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         assert batch.batch_dims == 2
 
         reward = batch[("next", "reward")]
-        max_rewards = torch.stack(tuple(torch.max(t) for t in reward.unbind(0)))
+        max_rewards = torch.stack(tuple(t.cumsum(-2).max() for t in reward.unbind(0)))
         mean_max_reward = torch.mean(max_rewards)
         self.log("reward", mean_max_reward, on_step=True)
 
