@@ -219,7 +219,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # Don't declare this as a Parameter, we perform gradient descent on it on its own
         # and don't use the normal optimizer
 
-        self.actor = model
+        self.model = model
         self._training_actor = None
         self._inference_actor = None
 
@@ -363,7 +363,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         return optim_config, log_temperature_optim_config
 
     def configure_model(self):
-        if self.actor is not None:
+        if self.model is not None:
             return
 
         model = self._default_model(
@@ -380,7 +380,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # convert_to_float8_training(model, config=float8_config)
         # model = torch.compile(model)
 
-        self.actor = SafeProbabilisticTensorDictSequential(
+        self.model = SafeProbabilisticTensorDictSequential(
             model,
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
@@ -401,9 +401,9 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         self.inference_actor.reset()
 
     def _configure_actor_wrappers(self):
-        self._training_actor = self.actor
+        self._training_actor = self.model
         inference_actor = DTInferenceWrapper(
-            self.actor, inference_context=self.inference_context
+            self.model, inference_context=self.inference_context
         )
         inference_actor.set_tensor_keys(
             observation=self.observation_key,
@@ -450,8 +450,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         out_keys = [self.out_action_key]
 
         # TODO: Bit whacky here
-        self.actor[0].in_keys = in_keys
-        self.actor[-1].out_keys = out_keys
+        self.model[0].in_keys = in_keys
+        self.model[-1].out_keys = out_keys
         self.inference_actor.in_keys = in_keys
         self.inference_actor.out_keys = out_keys
         self.loss_module.set_keys(
@@ -487,7 +487,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     @property
     def device(self):
-        return self.actor.device
+        return self.model.device
 
     @property
     def training_actor(self):

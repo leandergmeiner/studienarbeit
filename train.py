@@ -30,6 +30,16 @@ def main():
     logger = TensorBoardLogger(
         "rsrc", model_type, sub_dir="logs", default_hp_metric=False
     )
+
+    model_checkpoint = ModelCheckpoint(
+        save_last=True,
+        save_top_k=-1,
+        save_on_train_epoch_end=True,
+        # 2* since we call .step of the two optimizers
+        every_n_train_steps=1000 * 2,
+        dirpath=Path(logger.root_dir) / "models",
+    )
+
     trainer = Trainer(
         max_epochs=3,
         log_every_n_steps=50,
@@ -38,14 +48,7 @@ def main():
         num_sanity_val_steps=0,
         logger=logger,
         callbacks=[
-            ModelCheckpoint(
-                save_last=True,
-                save_top_k=-1,
-                save_on_train_epoch_end=True,
-                # 2* since we call .step of the two optimizers
-                every_n_train_steps=1000 * 2,
-                dirpath=Path(logger.root_dir) / "models",
-            ),
+            model_checkpoint,
             # StochasticWeightAveraging(swa_lrs=1e-2),
         ],
     )
@@ -73,9 +76,13 @@ def main():
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
-    # Online training
-    datamodule.set_mode("online", model)
-    trainer.fit(model, datamodule=datamodule, ckpt_path="last")
+    # trainer.fit_loop.max_epochs = 2 * trainer.fit_loop.max_epochs
+
+    # model = LightningDecisionTransformer.load_from_checkpoint(model_checkpoint.last_model_path)
+
+    # # Online training
+    # datamodule.set_mode("online", model)
+    # trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
 
 if __name__ == "__main__":
