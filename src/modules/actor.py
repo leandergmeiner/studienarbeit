@@ -243,7 +243,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     @set_interaction_type(InteractionType.RANDOM)
     @dispatch
     def forward(self, tensordict: TensorDict) -> TensorDict:
-        return self.inference_actor(tensordict)
+        out = self.inference_actor(tensordict)
+        action_id: torch.Tensor = out[self.out_action_key]
+        action_id = torch.multinomial(action_id.softmax(dim=-1), 1)
+        out[self.out_action_key] = action_id
+        return out
 
     @dispatch
     def predict_step(self, tensordict: TensorDict):
@@ -380,14 +384,14 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             model,
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
-                out_keys=["logits"],
+                out_keys=[self.out_action_key],
                 distribution_class=TanhNormal,
             ),
-            SafeProbabilisticModule(
-                in_keys=["logits"],
-                out_keys=[self.out_action_key],
-                distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
-            ),
+            # SafeProbabilisticModule(
+            #     in_keys=["logits"],
+            #     out_keys=[self.out_action_key],
+            #     distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
+            # ),
         )
         self._configure_actor_wrappers()
 
