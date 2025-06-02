@@ -73,14 +73,13 @@ def main():
     )
 
     # Offline training
+    print("Offline Training")
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
-    trainer.fit_loop.max_epochs = 2 * trainer.fit_loop.max_epochs
-
-    model = LightningDecisionTransformer.load_from_checkpoint(model_checkpoint.last_model_path)
-
     # Online training
+    print("Online Training")
+    trainer.fit_loop.max_epochs = 2 * trainer.fit_loop.max_epochs
     datamodule.set_mode("online", model)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
