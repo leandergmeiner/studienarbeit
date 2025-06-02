@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torchrl.envs
 from tensordict import TensorDict
+from tensordict.nn.probabilistic import InteractionType
 from torchrl.collectors import SyncDataCollector
 from torchrl.data import (
     LazyTensorStorage,
@@ -143,10 +144,11 @@ class GymnasiumStreamingDataset(
             # We fill the replay buffer with one batch completely
             # therefore we can always reuse the same tensordict
             return_same_td=True,
-            compile_policy=self.compilable,
+            # compile_policy=self.compilable,
             trust_policy=True,
             # device="cpu",
             # policy_device=getattr(self.policy, "device", None),
+            exploration_type=InteractionType.RANDOM,
         )
 
     @property
