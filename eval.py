@@ -1,6 +1,10 @@
 import glob
 import json
 from typing import Callable
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import pandas as pd
 
 import torch
 from einops import rearrange
@@ -76,6 +80,7 @@ files = sorted(
     filter(lambda f: not f.endswith("last.ckpt"), files), key=sort_checkpoint_names
 )
 
+
 @torch.no_grad()
 def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
     r = []
@@ -83,11 +88,11 @@ def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
         td = env.rollout(steps, policy)
         reward = td[("next", "reward")].cumsum(-2).max()
         r.append(reward)
-        
+
         if policy is not None and hasattr(policy, "reset"):
             policy.reset()
 
-    return torch.stack(r).mean().item()
+    return torch.stack(r).tolist()
 
 
 mean_rewards = []
@@ -111,7 +116,12 @@ for ckpt_file in files:
 rand_mean_reward = eval_mean_reward_model(None, env)
 arnold_mean_reward = eval_mean_reward_model(
     torch.compile(ArnoldAgent("defend_the_center")),
-    SerialEnv(1, lambda: TransformedEnv(GymEnv("sa/ArnoldDefendCenter-v0"), Compose(*arnold_env_make_transforms()))),
+    SerialEnv(
+        1,
+        lambda: TransformedEnv(
+            GymEnv("sa/ArnoldDefendCenter-v0"), Compose(*arnold_env_make_transforms())
+        ),
+    ),
 )
 
 
@@ -125,3 +135,47 @@ with open("eval_reward.json", "w") as f:
     json.dump(data, f)
 
 print("Done")
+
+
+def make_graph(
+    mean_rewards: list[list[float]] | np.ndarray,
+    rand_mean_reward: float,
+    arnold_mean_reward: float,
+    checkpoint_step: int = 2000,
+):
+    mean_rewards = np.array(mean_rewards)
+    x = np.arange(mean_rewards.shape[0]).repeat(mean_rewards.shape[1]).flatten()
+    x *= checkpoint_step
+    y = mean_rewards.flatten()
+
+    x = pd.Series(x, name="Checkpoint")
+    y = pd.Series(y, name="Achieved reward")
+
+    ax = sns.lineplot(x=x, y=y, label="Unser Modell")
+    ax.axhline(
+        rand_mean_reward,
+        0.0,
+        1.0,
+        color="red",
+        linestyle="dashed",
+        label="Zufällige Action",
+    )
+    ax.axhline(
+        arnold_mean_reward,
+        0.0,
+        1.0,
+        color="green",
+        linestyle="dashed",
+        label="Datensatz Policy",
+    )
+    ax.legend(loc="upper left")
+
+    return ax
+
+
+ax = make_graph(
+    mean_rewards=mean_rewards,
+    rand_mean_reward=rand_mean_reward,
+    arnold_mean_reward=arnold_mean_reward,
+)
+plt.savefig("rewards.png")

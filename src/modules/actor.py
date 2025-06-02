@@ -35,6 +35,42 @@ from src.modules.modules import (
 )
 
 
+class DecisionTransformerCatFrames(CatFrames):
+    def __init__(
+        self,
+        N,
+        dim,
+        in_keys=None,
+        out_keys=None,
+        padding="same",
+        padding_value=0,
+        as_inverse=False,
+        reset_key=None,
+        done_key=None,
+    ):
+        super().__init__(
+            N,
+            dim,
+            in_keys,
+            out_keys,
+            padding,
+            padding_value,
+            as_inverse,
+            reset_key,
+            done_key,
+        )
+
+        for in_key in self.in_keys:
+            buffer_name = f"_cat_buffers_{in_key}"
+            self.register_buffer(
+                buffer_name,
+                torch.nn.parameter.UninitializedBuffer(
+                    device=torch.device("cpu"), dtype=torch.get_default_dtype()
+                ),
+                persistent=False,
+            )
+
+
 # NOTE: Von Yannick: Hahaha, der Name ist lustig weil ... STEP-Wrapper hahaha!
 class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
     def __init__(
@@ -107,10 +143,10 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
 
     def reset(self):
         # TODO: Whack WTF??
-        self.cat_frames_obs = CatFrames(
+        self.cat_frames_obs = DecisionTransformerCatFrames(
             self.n_steps, in_keys=[self.observation_key], dim=-4
         )
-        self.cat_frames_other = CatFrames(
+        self.cat_frames_other = DecisionTransformerCatFrames(
             self.n_steps,
             in_keys=[
                 key
@@ -124,7 +160,7 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         # since we want to predict the action based on the
         # current frame.
         # To achieve this we always add a zero action at the start
-        self.cat_frames_action = CatFrames(
+        self.cat_frames_action = DecisionTransformerCatFrames(
             self.n_steps, in_keys=self.action_keys, dim=-2
         )
 
@@ -173,6 +209,19 @@ class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
         return next(self.actor.parameters()).device
 
 
+class IndependentDistribution(torch.distributions.Independent):
+    def __init__(
+        self,
+        base_distribution_class: type,
+        reinterpreted_batch_ndims,
+        validate_args=None,
+        **kwargs,
+    ):
+        super().__init__(
+            base_distribution_class(**kwargs), reinterpreted_batch_ndims, validate_args
+        )
+
+
 class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     def __init__(
         self,
@@ -219,7 +268,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # Don't declare this as a Parameter, we perform gradient descent on it on its own
         # and don't use the normal optimizer
 
-        self.model = model
+        self._model = model
         self._training_actor = None
         self._inference_actor = None
 
@@ -246,7 +295,9 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         out = self.inference_actor(tensordict)
         action_id: torch.Tensor = out[self.out_action_key]
         action_id = action_id.argmax(dim=-1)
-        out[self.out_action_key] = torch.nn.functional.one_hot(action_id, self.num_actions)
+        out[self.out_action_key] = torch.nn.functional.one_hot(
+            action_id, self.num_actions
+        )
         return out
 
     @dispatch
@@ -270,7 +321,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # print(self.actor[-1].distribution_kwargs)
 
         with set_interaction_type(self._training_interaction_type):
-            loss = self.loss_module(batch)
+            loss = self._loss_module(batch)
 
         accumulated_grad_batches = batch_idx % self.accumulate_grad_batches == 0
 
@@ -355,7 +406,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         }
 
         log_temperature_optimizer = torch.optim.Adam(
-            [self.loss_module.log_alpha], lr=lr
+            [self._loss_module.log_alpha], lr=lr
         )
 
         log_temperature_optim_config = {"optimizer": log_temperature_optimizer}
@@ -363,7 +414,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         return optim_config, log_temperature_optim_config
 
     def configure_model(self):
-        if self.model is not None:
+        if self._model is not None:
             return
 
         model = self._default_model(
@@ -380,30 +431,31 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # convert_to_float8_training(model, config=float8_config)
         # model = torch.compile(model)
 
-        self.model = SafeProbabilisticTensorDictSequential(
+        self._model = SafeProbabilisticTensorDictSequential(
             model,
             SafeProbabilisticModule(
                 in_keys=["loc", "scale"],
                 out_keys=[self.out_action_key],
-                distribution_class=TanhNormal,
+                distribution_class=IndependentDistribution,
+                distribution_kwargs=dict(
+                    base_distribution=TanhNormal,
+                    reinterpreted_batch_ndims=1,
+                    low=0.0,
+                    high=1.0,
+                ),
             ),
-            # SafeProbabilisticModule(
-            #     in_keys=["logits"],
-            #     out_keys=[self.out_action_key],
-            #     distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
-            # ),
+        )
+
+        # Populate the model
+        _ = torch.no_grad(self._model)(
+            self.example_input_array.to(self.device)[None, None, ...]
         )
         self._configure_actor_wrappers()
 
-        # Populate the model
-        self.to("cpu")
-        _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
-        self.inference_actor.reset()
-
     def _configure_actor_wrappers(self):
-        self._training_actor = self.model
+        self._training_actor = self._model
         inference_actor = DTInferenceWrapper(
-            self.model, inference_context=self.inference_context
+            self._model, inference_context=self.inference_context
         )
         inference_actor.set_tensor_keys(
             observation=self.observation_key,
@@ -421,14 +473,14 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
         target_entropy = -self.num_actions
         loss_module = OnlineDTLoss(
-            self.training_actor,
+            self._model,
             target_entropy=target_entropy,
             alpha_init=self.init_temperature,
         )
         loss_module.set_keys(
             action_pred=self.out_action_key, action_target=self.target_key
         )
-        self.loss_module = loss_module
+        self._loss_module = loss_module
 
     def set_tensor_keys(
         self,
@@ -448,11 +500,11 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         out_keys = [self.out_action_key]
 
         # TODO: Bit whacky here
-        self.model[0].in_keys = in_keys
-        self.model[-1].out_keys = out_keys
+        self._model[0].in_keys = in_keys
+        self._model[-1].out_keys = out_keys
         self.inference_actor.in_keys = in_keys
         self.inference_actor.out_keys = out_keys
-        self.loss_module.set_keys(
+        self._loss_module.set_keys(
             action_pred=self.out_action_key, action_target=self.target_key
         )
 
@@ -469,17 +521,16 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             self.target_key,
         ]
 
-    def state_dict(self):
-        state_dict = super().state_dict()
-        
-        skip_keys = ["_inference_actor", "_training_actor", "loss_module"]
+    def state_dict(self, *, prefix: str = "", keep_vars: bool = False):
+        state_dict = super().state_dict(prefix=prefix, keep_vars=keep_vars)
+
+        skip_keys = ["_inference_actor", "_training_actor", "_model"]
 
         # Avoid saving the model multiple times, since its included in each actor
         return {k: v for k, v in state_dict.items() if k.split(".")[0] not in skip_keys}
 
     def load_state_dict(self, state_dict, strict=True, assign=False):
-        super().load_state_dict(state_dict, False, assign)
-        self._configure_actor_wrappers()
+        return super().load_state_dict(state_dict, False, assign)
 
     def _calculate_metrics(self, prediction: torch.Tensor, label: torch.Tensor):
         label = label.int()
@@ -487,7 +538,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     @property
     def device(self):
-        return self.model.device
+        return self._model.device
 
     @property
     def training_actor(self):
@@ -500,7 +551,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
     @property
     def temperature(self):
         if hasattr(self, "loss_module"):
-            return self.loss_module.alpha
+            return self._loss_module.alpha
         else:
             return self.init_temperature
 
