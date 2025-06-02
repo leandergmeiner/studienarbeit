@@ -447,6 +447,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         )
 
         # Populate the model
+        self.to("cpu")
         _ = torch.no_grad(self._model)(
             self.example_input_array.to(self.device)[None, None, ...]
         )
