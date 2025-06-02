@@ -449,10 +449,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
         # Populate the model
         self.to("cpu")
-        _ = torch.no_grad(self._model)(
-            self.example_input_array.to(self.device)[None, None, ...]
-        )
         self._configure_actor_wrappers()
+        _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
 
     def _configure_actor_wrappers(self):
         self._training_actor = self._model
