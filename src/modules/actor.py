@@ -74,15 +74,7 @@ class DecisionTransformerCatFrames(CatFrames):
             
             
     def __deepcopy__(self, memo):
-        for in_key in self.in_keys:
-            buffer_name = f"_cat_buffers_{in_key}"
-            delattr(self, buffer_name)
-            
-        other = super().__deepcopy__(memo)
-        
-        other._make_buffers()
-        self._make_buffers()
-        
+        other = self.clone()
         return other
         
 # NOTE: Von Yannick: Hahaha, der Name ist lustig weil ... STEP-Wrapper hahaha!
