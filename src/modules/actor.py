@@ -443,6 +443,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                     low=0.0,
                     high=1.0,
                 ),
+                default_interaction_type=InteractionType.RANDOM,
             ),
         )
 
