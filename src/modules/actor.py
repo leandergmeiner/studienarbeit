@@ -580,7 +580,10 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
 
     def reset(self):
         self.inference_actor.reset()
-
+        
+    def __deepcopy__(self, memo):
+        return self.clone()
+        
     def _default_model(
         self,
         model_type: Literal["transformer", "cnn"] = "transformer",
