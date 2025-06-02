@@ -438,7 +438,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
                 out_keys=[self.out_action_key],
                 distribution_class=IndependentDistribution,
                 distribution_kwargs=dict(
-                    base_distribution=TanhNormal,
+                    base_distribution_class=TanhNormal,
                     reinterpreted_batch_ndims=1,
                     low=0.0,
                     high=1.0,
