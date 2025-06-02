@@ -170,7 +170,6 @@ class DoomStreamingDataModule(LightningDataModule):
 
             if method != "online" and dataset_info.policy_maker:
                 policy = dataset_info.policy_maker()
-                policy = torch.compile(policy)
             else:
                 policy = online_policy()
 
