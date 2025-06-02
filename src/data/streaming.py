@@ -126,12 +126,12 @@ class GymnasiumStreamingDataset(
         collector.shutdown()
 
     def collector(self):
-        # if (
-        #     self.policy is not None
-        #     and hasattr(self.policy, "reset")
-        #     and callable(self.policy.reset)
-        # ):
-        #     self.policy.reset()
+        if (
+            self.policy is not None
+            and hasattr(self.policy, "reset")
+            and callable(self.policy.reset)
+        ):
+            self.policy.reset()
 
         return SyncDataCollector(
             self.create_env_fn,
@@ -144,7 +144,7 @@ class GymnasiumStreamingDataset(
             # We fill the replay buffer with one batch completely
             # therefore we can always reuse the same tensordict
             return_same_td=True,
-            compile_policy=self.compilable,
+            # compile_policy=self.compilable,
             device="cpu",
             exploration_type=InteractionType.RANDOM,
         )

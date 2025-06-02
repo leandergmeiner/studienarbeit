@@ -70,10 +70,6 @@ class DecisionTransformerCatFrames(CatFrames):
                 persistent=False,
             )
             
-            
-    def __deepcopy__(self, memo):
-        other = self.clone()
-        return other
         
 # NOTE: Von Yannick: Hahaha, der Name ist lustig weil ... STEP-Wrapper hahaha!
 class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
@@ -454,6 +450,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         # Populate the model
         self.to("cpu")
         self._configure_actor_wrappers()
+        _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
 
     def _configure_actor_wrappers(self):
         self._training_actor = self._model
@@ -484,8 +481,6 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             action_pred=self.out_action_key, action_target=self.target_key
         )
         self._loss_module = loss_module
-        
-        _ = torch.no_grad(self.inference_actor.forward)(self.example_input_array)
 
     def set_tensor_keys(
         self,
@@ -578,9 +573,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         return interaction_type_mapping[self.method]
 
     def reset(self):
-        print("Reset")
         self.inference_actor.reset()
-        
+
     def _default_model(
         self,
         model_type: Literal["transformer", "cnn"] = "transformer",
@@ -639,6 +633,7 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         transformer_actor = OnlineDTActor(
             VideoDT(
                 hidden_size=hidden_size,
+                # patching=patching,
                 frame_skip=frame_skip,
                 spatial_encoder=spatial_encoder,
                 temporal_transformer=temporal_transformer,
