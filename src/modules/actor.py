@@ -60,8 +60,6 @@ class DecisionTransformerCatFrames(CatFrames):
             done_key,
         )
 
-
-    def _make_buffers(self):
         for in_key in self.in_keys:
             buffer_name = f"_cat_buffers_{in_key}"
             self.register_buffer(
