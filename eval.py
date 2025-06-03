@@ -35,8 +35,8 @@ model_type = "transformer"
 
 frame_skip = 1
 target = 50
-steps = 500
-device = "cpu"
+steps = 400
+device = "cuda:0"
 logger = CSVLogger(exp_name="test", log_dir="test_dir", video_format="mp4")
 video_recorder = VideoRecorder(
     logger=logger, in_keys=["saved_screen"], tag=f"{model_type}_video", make_grid=False
@@ -84,7 +84,7 @@ files = sorted(
 @torch.no_grad()
 def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
     r = []
-    for _ in range(5):
+    for _ in range(3):
         td = env.rollout(steps, policy)
         reward = td[("next", "reward")].cumsum(-2).max()
         r.append(reward)
@@ -92,7 +92,7 @@ def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
         if policy is not None and hasattr(policy, "reset"):
             policy.reset()
 
-    return torch.stack(r).tolist()
+    return r
 
 
 mean_rewards = []
@@ -109,7 +109,7 @@ for ckpt_file in files:
 
     model.eval()
     model.to(device)
-    model = torch.compile(model)
+    model._model = torch.compile(model._model)
 
     mean_rewards.append(eval_mean_reward_model(model, env))
 
@@ -153,7 +153,7 @@ def make_graph(
 
     ax = sns.lineplot(x=x, y=y, label="Unser Modell")
     ax.axhline(
-        rand_mean_reward,
+        np.mean(rand_mean_reward),
         0.0,
         1.0,
         color="red",
@@ -161,7 +161,7 @@ def make_graph(
         label="Zufällige Action",
     )
     ax.axhline(
-        arnold_mean_reward,
+        np.mean(arnold_mean_reward),
         0.0,
         1.0,
         color="green",

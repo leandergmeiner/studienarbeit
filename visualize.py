@@ -70,6 +70,7 @@ model = LightningDecisionTransformer.load_from_checkpoint(
 
 model.eval()
 model.to(device)
+model._model = torch.compile(model._model)
 
 print("Starting rollout")
 
@@ -77,36 +78,4 @@ with torch.no_grad():
     td = env.rollout(steps, model)
 env.transform.dump()
 
-# We need to do a manual rollout, since env.rollout does not
-# respect the FrameSkipTransform, apparently
-
-# input_td = env.reset()
-# action = TensorDict(action=[0])
-
-
-# def next_action(tensordict):
-#     return action
-
-
-# actions = []
-# obs = []
-# for i in range(steps):
-#     rollout_td = env.rollout(
-#         policy=next_action,
-#         max_steps=model.frame_skip,
-#         break_when_any_done=False,
-#         auto_reset=False,
-#         tensordict=input_td,
-#     )
-#     input_td = step_mdp(
-#         rollout_td[..., -1],
-#     )
-#     obs.append(rollout_td["saved_screen"])
-#     action = model(input_td)
-#     # action["action"] = action["action"].flip(-1).roll(-2)
-#     # action["action"] = action["action"].flip(-1)
-#     actions.append(action["action"])
-
-# video_recorder.obs = torch.cat(obs).unbind(0)
-# video_recorder.dump()
 print("Done")
