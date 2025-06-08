@@ -18,11 +18,7 @@ from torchrl.envs import CatFrames
 
 # from torchao.float8 import Float8LinearConfig, convert_to_float8_training
 # from torchrl.modules.tensordict_module import SafeSequential
-from torchrl.modules import (
-    SafeProbabilisticModule,
-    SafeProbabilisticTensorDictSequential,
-    TanhNormal,
-)
+from torchrl.modules import ProbabilisticActor
 from torchrl.objectives import OnlineDTLoss
 from transformers import GPT2Config, GPT2Model
 
@@ -69,8 +65,8 @@ class DecisionTransformerCatFrames(CatFrames):
                 ),
                 persistent=False,
             )
-            
-        
+
+
 # NOTE: Von Yannick: Hahaha, der Name ist lustig weil ... STEP-Wrapper hahaha!
 class DecisionTransformerInferenceStepWrapper(TensorDictModuleBase):
     def __init__(
@@ -429,22 +425,13 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         #     pad_inner_dim=True,
         # )
         # convert_to_float8_training(model, config=float8_config)
-        # model = torch.compile(model)
 
-        self._model = SafeProbabilisticTensorDictSequential(
+        model = torch.compile(model)
+        self._model = ProbabilisticActor(
             model,
-            SafeProbabilisticModule(
-                in_keys=["loc", "scale"],
-                out_keys=[self.out_action_key],
-                distribution_class=IndependentDistribution,
-                distribution_kwargs=dict(
-                    base_distribution_class=TanhNormal,
-                    reinterpreted_batch_ndims=1,
-                    low=0.0,
-                    high=1.0,
-                ),
-                default_interaction_type=InteractionType.RANDOM,
-            ),
+            in_keys=["logits"],
+            out_keys=[self.out_action_key],
+            distribution_class=torch.distributions.OneHotCategoricalStraightThrough,
         )
 
         # Populate the model
@@ -481,6 +468,16 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
             action_pred=self.out_action_key, action_target=self.target_key
         )
         self._loss_module = loss_module
+
+    def __deepcopy__(self, memo):
+        other = LightningDecisionTransformer(**self.hparams_initial)
+        other.configure_model()
+        other = other.to(self.device)
+        params = TensorDict.from_module(self._model, as_module=True)
+        params.to_module(other._model)
+        other._configure_actor_wrappers()
+        _ = torch.no_grad(other.inference_actor.forward)(other.example_input_array)
+        return other
 
     def set_tensor_keys(
         self,
@@ -645,5 +642,5 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         return TensorDictModule(
             transformer_actor,
             in_keys=[self.observation_key, self.action_key, self.rtg_key],
-            out_keys=["loc", "scale"],
+            out_keys=["logits"],
         )

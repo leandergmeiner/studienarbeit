@@ -87,7 +87,7 @@ def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
     for _ in range(3):
         td = env.rollout(steps, policy)
         reward = td[("next", "reward")].cumsum(-2).max()
-        r.append(reward)
+        r.append(reward.item())
 
         if policy is not None and hasattr(policy, "reset"):
             policy.reset()

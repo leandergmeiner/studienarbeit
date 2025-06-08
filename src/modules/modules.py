@@ -116,8 +116,10 @@ class OnlineDTActor(torch.nn.Module):
         super().__init__()
         self.model = model
 
-        self.action_layer_mean = torch.nn.Linear(hidden_dim, action_dim)
-        self.action_layer_logstd = torch.nn.Linear(hidden_dim, action_dim)
+        self.action_layer = torch.nn.Linear(hidden_dim, action_dim)
+
+        # self.action_layer_mean = torch.nn.Linear(hidden_dim, action_dim)
+        # self.action_layer_logstd = torch.nn.Linear(hidden_dim, action_dim)
 
         self.log_std_min, self.log_std_max = -5.0, 2.0
         self.ln = torch.nn.LayerNorm(hidden_dim)
@@ -140,18 +142,8 @@ class OnlineDTActor(torch.nn.Module):
             observation, action, return_to_go, attention_mask=attention_mask
         )
         hidden_state = self.ln(hidden_state)
-        mu = self.action_layer_mean(hidden_state)
-        log_std = self.action_layer_logstd(hidden_state)
-
-        log_std = torch.tanh(log_std)
-        # log_std is the output of tanh so it will be between [-1, 1]
-        # map it to be between [log_std_min, log_std_max]
-        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            log_std + 1.0
-        )
-        std = log_std.exp()
-        
-        return mu, std
+        logits = self.action_layer(hidden_state)
+        return logits
 
 
 class DTInferenceWrapper(DecisionTransformerInferenceWrapper):

@@ -68,8 +68,7 @@ class ArnoldAgent(torch.nn.Module):
             height=60,
             width=108,
             hist_size=4,
-            # gpu_id=-1,  # We will move the model to the GPU ourselves
-            gpu_id=-1,  # TODO FIXME
+            gpu_id=-1,
             speed="off",
             crouch="off",
             use_continuous=False,

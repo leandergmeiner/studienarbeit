@@ -119,9 +119,10 @@ class GymnasiumStreamingDataset(
                     self._max_seen_rtg = np.float64(td[self.reward_key].max())
 
                 yield td
+                return
 
                 if num_steps > self.max_steps:
-                    break
+                    return
 
         collector.shutdown()
 
@@ -145,7 +146,7 @@ class GymnasiumStreamingDataset(
             # therefore we can always reuse the same tensordict
             return_same_td=True,
             # compile_policy=self.compilable,
-            device="cpu",
+            # device="cpu",
             exploration_type=InteractionType.RANDOM,
         )
 
@@ -169,7 +170,7 @@ class LazyChainDataset(torch.utils.data.IterableDataset):
         for d in self.make_datasets():
             yield from d
 
-    def __len__(self):
-        # s = sum(len(d) for d in self.make_datasets())
-        # return s
-        return self._len
+    # def __len__(self):
+    #     # s = sum(len(d) for d in self.make_datasets())
+    #     # return s
+    #     return self._len

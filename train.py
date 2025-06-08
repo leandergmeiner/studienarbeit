@@ -58,8 +58,7 @@ def main():
         inference_context=inference_context,
         target_key="target_action",
         rtg_key="target_return",
-        # lr=5e-4,
-        lr=5e-3,
+        lr=5e-4,
         accumulate_grad_batches=accumulate_grad_batches,
     )
 
