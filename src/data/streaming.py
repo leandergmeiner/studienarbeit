@@ -119,7 +119,6 @@ class GymnasiumStreamingDataset(
                     self._max_seen_rtg = np.float64(td[self.reward_key].max())
 
                 yield td
-                return
 
                 if num_steps > self.max_steps:
                     return

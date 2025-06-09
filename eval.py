@@ -108,7 +108,7 @@ for ckpt_file in files:
     )
 
     model.eval()
-    model.to(device)
+    # model.to(device)
     model._model = torch.compile(model._model)
 
     mean_rewards.append(eval_mean_reward_model(model, env))

@@ -425,8 +425,8 @@ class LightningDecisionTransformer(L.LightningModule, TensorDictModuleBase):
         #     pad_inner_dim=True,
         # )
         # convert_to_float8_training(model, config=float8_config)
+        # model = torch.compile(model)
 
-        model = torch.compile(model)
         self._model = ProbabilisticActor(
             model,
             in_keys=["logits"],
