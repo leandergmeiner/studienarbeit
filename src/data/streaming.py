@@ -169,7 +169,7 @@ class LazyChainDataset(torch.utils.data.IterableDataset):
         for d in self.make_datasets():
             yield from d
 
-    # def __len__(self):
-    #     # s = sum(len(d) for d in self.make_datasets())
-    #     # return s
-    #     return self._len
+    def __len__(self):
+        # s = sum(len(d) for d in self.make_datasets())
+        # return s
+        return self._len

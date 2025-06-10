@@ -259,26 +259,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 max_steps=1_000_000,
                 max_steps_per_traj=500,
             ),
-            DatasetInfo(
-                name="health_gathering",
-                method="offline",
-                policy_maker=partial(ArnoldAgent, "health_gathering"),
-                create_env_fn=partial(GymEnv, "sa/ArnoldHealthGathering-v0"),
-                make_env_transforms=partial(
-                    arnold_env_make_transforms,
-                    game_variables=[vzd.GameVariable.HEALTH],
-                    frame_skip=4,
-                ),
-                make_dataset_transforms=partial(
-                    arnold_dataset_make_transforms,
-                    observation_shape=(224, 224),
-                    exclude_next_observation=True,
-                    collector_out_key="action",
-                    rtg_key="target_return",
-                ),
-                max_steps=1_000_000,
-                max_steps_per_traj=500,
-            ),
+            
             DatasetInfo(
                 name="defend_the_center",
                 method="online",
@@ -296,21 +277,41 @@ class DoomStreamingDataModule(LightningDataModule):
                 max_steps_per_traj=500,
                 guessed_target_return=40.0,
             ),
-            DatasetInfo(
-                name="health_gathering",
-                method="online",
-                policy_maker=None,  # Can be none, since it's online and the policy is replaced.
-                create_env_fn=partial(GymEnv, "sa/ArnoldHealthGathering-v0"),
-                make_env_transforms=partial(
-                    online_env_make_transforms, observation_shape=(224, 224)
-                ),
-                make_dataset_transforms=partial(
-                    online_dataset_make_transforms,
-                    rtg_key="target_return",
-                    collector_out_key="action",
-                ),
-                max_steps=250_000,
-                max_steps_per_traj=500,
-                guessed_target_return=30.0,
-            ),
+            # DatasetInfo(
+            #     name="health_gathering",
+            #     method="offline",
+            #     policy_maker=partial(ArnoldAgent, "health_gathering"),
+            #     create_env_fn=partial(GymEnv, "sa/ArnoldHealthGathering-v0"),
+            #     make_env_transforms=partial(
+            #         arnold_env_make_transforms,
+            #         game_variables=[vzd.GameVariable.HEALTH],
+            #         frame_skip=4,
+            #     ),
+            #     make_dataset_transforms=partial(
+            #         arnold_dataset_make_transforms,
+            #         observation_shape=(224, 224),
+            #         exclude_next_observation=True,
+            #         collector_out_key="action",
+            #         rtg_key="target_return",
+            #     ),
+            #     max_steps=1_000_000,
+            #     max_steps_per_traj=500,
+            # ),
+            # DatasetInfo(
+            #     name="health_gathering",
+            #     method="online",
+            #     policy_maker=None,  # Can be none, since it's online and the policy is replaced.
+            #     create_env_fn=partial(GymEnv, "sa/ArnoldHealthGathering-v0"),
+            #     make_env_transforms=partial(
+            #         online_env_make_transforms, observation_shape=(224, 224)
+            #     ),
+            #     make_dataset_transforms=partial(
+            #         online_dataset_make_transforms,
+            #         rtg_key="target_return",
+            #         collector_out_key="action",
+            #     ),
+            #     max_steps=250_000,
+            #     max_steps_per_traj=500,
+            #     guessed_target_return=30.0,
+            # ),
         ]
