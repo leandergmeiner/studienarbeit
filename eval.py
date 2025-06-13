@@ -84,7 +84,7 @@ files = sorted(
 @torch.no_grad()
 def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
     r = []
-    for _ in range(3):
+    for _ in range(5):
         td = env.rollout(steps, policy)
         reward = td[("next", "reward")].cumsum(-2).max()
         r.append(reward.item())

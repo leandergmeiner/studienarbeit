@@ -40,6 +40,20 @@ class DatasetInfo:
 _NUM_ACTIONS = 10
 # _FRAME_SKIP = 4  # TODO: This number is not enforced
 
+def make_env_serial(dataset_info: DatasetInfo, max_seen_rtg: float):
+    def make_env():
+        env = dataset_info.create_env_fn()
+        wrapped = TransformedEnv(
+            env,
+            Compose(
+                *dataset_info.make_env_transforms(
+                    target_return=max_seen_rtg
+                )
+            ),
+        )
+        return wrapped
+
+    return SerialEnv(1, make_env)
 
 class DoomStreamingDataModule(LightningDataModule):
     NUM_ACTIONS = _NUM_ACTIONS
@@ -148,21 +162,6 @@ class DoomStreamingDataModule(LightningDataModule):
             ):
                 max_seen_rtg = dataset_info.guessed_target_return
 
-            def make_env_serial():
-                def make_env():
-                    env = dataset_info.create_env_fn()
-                    wrapped = TransformedEnv(
-                        env,
-                        Compose(
-                            *dataset_info.make_env_transforms(
-                                target_return=max_seen_rtg
-                            )
-                        ),
-                    )
-                    return wrapped
-
-                return SerialEnv(1, make_env)
-
             # _dataset_start_index is not 0 if we loaded from a state dict
             size = dataset_info.max_steps - self._dataset_start_index
 
@@ -185,7 +184,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 num_trajs=self.num_trajs,
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
-                create_env_fn=make_env_serial,
+                create_env_fn=partial(make_env_serial, dataset_info, max_seen_rtg),
                 transform=Compose(*dataset_info.make_dataset_transforms()),
                 compilable=True,
             )
@@ -212,21 +211,21 @@ class DoomStreamingDataModule(LightningDataModule):
             pin_memory_device="cuda:0" if self.pin_memory else None,
         )
 
-    def _val_dataset_iterator(self) -> Iterator[TensorDict]:
-        for dataset in self._make_validation_datasets():
-            td = next(dataset.collector().iterator())
-            del td["observation"]  # TODO: This is whack
-            del td[("next", "observation")]  # TODO: This is whack
-            yield td
+    # def _val_dataset_iterator(self) -> Iterator[TensorDict]:
+    #     for dataset in self._make_validation_datasets():
+    #         td = next(dataset.collector().iterator())
+    #         del td["observation"]  # TODO: This is whack
+    #         del td[("next", "observation")]  # TODO: This is whack
+    #         yield td
 
-    def val_dataloader(self):
-        return DataLoader(
-            LazyChainDataset(self._val_dataset_iterator),
-            collate_fn=torch.cat,
-            in_order=False,
-            pin_memory=self.pin_memory,
-            pin_memory_device="cuda:0" if self.pin_memory else None,
-        )
+    # def val_dataloader(self):
+    #     return DataLoader(
+    #         LazyChainDataset(self._val_dataset_iterator),
+    #         collate_fn=torch.cat,
+    #         in_order=False,
+    #         pin_memory=self.pin_memory,
+    #         pin_memory_device="cuda:0" if self.pin_memory else None,
+    #     )
 
     def state_dict(self):
         return {

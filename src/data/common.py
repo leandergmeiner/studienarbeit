@@ -42,18 +42,18 @@ DEFAULT_REWARD_FUNCS = {
     vzd.GameVariable.SELECTED_WEAPON_AMMO: leru(1, 10),
 }
 
-DEFEND_CENTER_REWARD_FUNCS = {    
+DEFEND_CENTER_REWARD_FUNCS = {
     vzd.GameVariable.DEATHCOUNT: delta(0),
-    vzd.GameVariable.KILLCOUNT: delta(2),
+    vzd.GameVariable.KILLCOUNT: delta(10),
     vzd.GameVariable.ITEMCOUNT: delta(0),
     vzd.GameVariable.ARMOR: delta(0),
-    vzd.GameVariable.HEALTH: delta(1),
-    vzd.GameVariable.DAMAGE_TAKEN: delta(0),
-    vzd.GameVariable.DAMAGECOUNT: delta(0),
+    vzd.GameVariable.HEALTH: delta(0),
+    vzd.GameVariable.DAMAGE_TAKEN: delta(-1),
+    vzd.GameVariable.DAMAGECOUNT: delta(1),
     vzd.GameVariable.SELECTED_WEAPON_AMMO: delta(0),
 }
 
-HEALTH_GATHERING_REWARD_FUNCS = {    
+HEALTH_GATHERING_REWARD_FUNCS = {
     vzd.GameVariable.DEATHCOUNT: delta(0),
     vzd.GameVariable.KILLCOUNT: delta(0),
     vzd.GameVariable.ITEMCOUNT: delta(0),
