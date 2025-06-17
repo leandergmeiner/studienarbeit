@@ -2,20 +2,21 @@
 from pathlib import Path
 
 import fire
-import torch
-from lightning import Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
-from lightning.pytorch.loggers import TensorBoardLogger
 
-from src.data.dataset import DoomStreamingDataModule
-from src.modules import LightningDecisionTransformer
 
 # %%
-torch.backends.cuda.enable_mem_efficient_sdp(True)
-torch.backends.cudnn.benchmark = True
-
-
 def main(model_type="transformer", inference_context=64):
+    import torch
+    from lightning import Trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
+    from lightning.pytorch.loggers import TensorBoardLogger
+
+    from src.data.dataset import DoomStreamingDataModule
+    from src.modules import LightningDecisionTransformer
+
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cudnn.benchmark = True
+
     if model_type == "transformer":
         accumulate_grad_batches = 32
         max_batch_size_in_mem = 2

@@ -51,12 +51,7 @@ class GymnasiumStreamingDataset(
         self.compilable = compilable
 
         storage = LazyTensorStorage(
-            # FIXME:
-            # num_trajs, ndim=1
-            # self.storage_size, ndim=1
-            self.storage_size,
-            ndim=1,
-            compilable=self.compilable,
+            self.storage_size, ndim=1, compilable=self.compilable
         )
 
         compile_kwargs = (
@@ -75,9 +70,8 @@ class GymnasiumStreamingDataset(
             # strict_length=False,
             cache_values=True,
             compile=compile_kwargs,
-            use_gpu=self.compilable,
         )
-        
+
         batch_size_transitions = batch_size * batch_traj_len
 
         super().__init__(
@@ -105,7 +99,7 @@ class GymnasiumStreamingDataset(
             )  # TODO
 
             for td in data_iterator:
-                td = td.reshape(self.num_slices, -1)
+                td: TensorDict = td.reshape(self.num_slices, -1)
 
                 # [:-1] -> Exclude the time dimension from the num of trajectories calculation.
                 num_steps += td.batch_size.numel()
