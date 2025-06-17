@@ -29,12 +29,13 @@ class DatasetInfo:
     create_env_fn: Callable
     max_steps: int
     max_steps_per_traj: int
+    method: Literal["offline", "online"] = "offline"
     policy_maker: torch.nn.Module | None = None
     make_env_transforms: Callable[..., list] = list
     make_dataset_transforms: Callable[..., list] = list
     target_return_scaling_factor: float = 1.5
-    method: Literal["offline", "online"] = "offline"
     guessed_target_return: float | None = None
+    rtg_key: str = "target_return"
 
 
 _NUM_ACTIONS = 10
@@ -182,7 +183,8 @@ class DoomStreamingDataModule(LightningDataModule):
                 num_trajs=self.num_trajs,
                 alpha=1.0,
                 # Sometimes also show "bad" trajectories for the model, may help with exploration
-                beta=0.1, 
+                beta=0.1,
+                priority_key=dataset_info.rtg_key,
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
                 create_env_fn=partial(make_env_serial, dataset_info, max_seen_rtg),
@@ -258,6 +260,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 ),
                 max_steps=1_000_000,
                 max_steps_per_traj=500,
+                rtg_key="target_return",
             ),
             DatasetInfo(
                 name="defend_the_center",
@@ -275,6 +278,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 max_steps=250_000,
                 max_steps_per_traj=500,
                 guessed_target_return=150.0,
+                rtg_key="target_return",
             ),
             # DatasetInfo(
             #     name="health_gathering",

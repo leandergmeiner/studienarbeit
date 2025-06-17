@@ -5,7 +5,7 @@ import fire
 
 
 # %%
-def main(model_type="transformer", inference_context=64):
+def main(model_type="transformer", inference_context=64, lr: float = 5e-5):
     import torch
     from lightning import Trainer
     from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
@@ -56,7 +56,7 @@ def main(model_type="transformer", inference_context=64):
         inference_context=inference_context,
         target_key="target_action",
         rtg_key="target_return",
-        lr=5e-4,
+        lr=lr,
         accumulate_grad_batches=accumulate_grad_batches,
     )
 
@@ -68,7 +68,7 @@ def main(model_type="transformer", inference_context=64):
         batch_traj_len=inference_context,
         num_workers=3,
     )
-    
+
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
@@ -79,7 +79,7 @@ def main(model_type="transformer", inference_context=64):
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
         max_seen_rtgs=datamodule.max_seen_rtgs,
-        num_workers=0, # TODO: The need of setting this to 0 is whack
+        num_workers=0,  # TODO: The need of setting this to 0 is whack
     )
 
     # Update the number of max epochs to include the online training
