@@ -182,8 +182,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 max_traj_len=dataset_info.max_steps_per_traj,
                 num_trajs=self.num_trajs,
                 alpha=1.0,
-                # Sometimes also show "bad" trajectories for the model, may help with exploration
-                beta=0.1,
+                beta=1.0,
                 priority_key=dataset_info.rtg_key,
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
