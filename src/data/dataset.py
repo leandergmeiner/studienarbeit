@@ -40,20 +40,18 @@ class DatasetInfo:
 _NUM_ACTIONS = 10
 # _FRAME_SKIP = 4  # TODO: This number is not enforced
 
-def make_env_serial(dataset_info: DatasetInfo, max_seen_rtg: float):
+
+def make_env_serial(dataset_info: DatasetInfo, max_seen_rtg: float, num_envs: int = 1):
     def make_env():
         env = dataset_info.create_env_fn()
         wrapped = TransformedEnv(
             env,
-            Compose(
-                *dataset_info.make_env_transforms(
-                    target_return=max_seen_rtg
-                )
-            ),
+            Compose(*dataset_info.make_env_transforms(target_return=max_seen_rtg)),
         )
         return wrapped
 
-    return SerialEnv(1, make_env)
+    return SerialEnv(num_envs, make_env)
+
 
 class DoomStreamingDataModule(LightningDataModule):
     NUM_ACTIONS = _NUM_ACTIONS
@@ -65,7 +63,7 @@ class DoomStreamingDataModule(LightningDataModule):
         batch_size: int,
         batch_traj_len: int = 64,
         method: Literal["offline", "online"] = "offline",
-        num_workers: int = 0,
+        num_workers: int | None = None,
         num_trajs: int = 0,
         max_seen_rtgs: dict[str, np.float64] | None = None,
         pin_memory=torch.cuda.is_available(),
@@ -75,8 +73,8 @@ class DoomStreamingDataModule(LightningDataModule):
 
         self.batch_size = batch_size
         self.batch_traj_len = batch_traj_len
-        self.num_workers = num_workers
         self.num_trajs = num_trajs or batch_size
+        self.num_workers = num_workers if num_workers is not None else self.num_trajs
         self.policy = policy
         self.method = method
         self.pin_memory = pin_memory
@@ -182,6 +180,9 @@ class DoomStreamingDataModule(LightningDataModule):
                 batch_traj_len=self.batch_traj_len,
                 max_traj_len=dataset_info.max_steps_per_traj,
                 num_trajs=self.num_trajs,
+                alpha=1.0,
+                # Sometimes also show "bad" trajectories for the model, may help with exploration
+                beta=0.1, 
                 policy=policy,
                 max_seen_rtg=max_seen_rtg,
                 create_env_fn=partial(make_env_serial, dataset_info, max_seen_rtg),
@@ -258,7 +259,6 @@ class DoomStreamingDataModule(LightningDataModule):
                 max_steps=1_000_000,
                 max_steps_per_traj=500,
             ),
-            
             DatasetInfo(
                 name="defend_the_center",
                 method="online",
@@ -274,7 +274,7 @@ class DoomStreamingDataModule(LightningDataModule):
                 ),
                 max_steps=250_000,
                 max_steps_per_traj=500,
-                guessed_target_return=40.0,
+                guessed_target_return=150.0,
             ),
             # DatasetInfo(
             #     name="health_gathering",

@@ -129,15 +129,14 @@ def arnold_dataset_make_transforms(
     collector_out_key: str,
     observation_shape: tuple[int, int] = (224, 224),
     reward_key=("next", "reward"),
-    exclude_next_observation: bool = False,
     rtg_key="return_to_go",
+    exclude_next_observation: bool = False,
 ):
     pixels_keys = (
         ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
     )
 
     inverse_transforms = [
-        # TODO: Naming
         torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
         torchrl.envs.RenameTransform(
             in_keys=[],
@@ -169,13 +168,11 @@ def arnold_dataset_make_transforms(
             shape_tolerant=True,
         ),
         torchrl.envs.ExcludeTransform("original", ("next", "original")),
-        # TODO: Already apply this for .inv(...)
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.bool,
             dtype_out=torch.float,
             in_keys=[collector_out_key],
         ),
-        # TODO: Already apply this for .inv(...)
         torchrl.envs.UnaryTransform(
             in_keys=[collector_out_key],
             out_keys=["target_action"],
@@ -214,6 +211,7 @@ def arnold_dataset_make_transforms(
     return [Compose(*inverse_transforms), Compose(*forward_transforms)]
 
 
+# TODO: Add frame_skip transform
 def online_env_make_transforms(
     target_return: float | None = None, observation_shape: tuple[int, int] = (224, 224)
 ):
@@ -245,18 +243,11 @@ def online_dataset_make_transforms(
     rtg_key="return_to_go",
 ):
     pixels_keys = (
-        ["pixels", ("next", "pixels")] if exclude_next_observation else ["pixels"]
+        ["observation", ("next", "observation")] if exclude_next_observation else ["observation"]
     )
 
     inverse_transforms = [
-        # TODO: Naming
         torchrl.envs.Reward2GoTransform(in_keys=[reward_key], out_keys=[rtg_key]),
-        torchrl.envs.RenameTransform(
-            in_keys=[],
-            out_keys=[],
-            out_keys_inv=["observation"],
-            in_keys_inv=["pixels"],
-        ),
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.int64,
             dtype_out=torch.bool,
@@ -274,47 +265,23 @@ def online_dataset_make_transforms(
 
     if exclude_next_observation:
         inverse_transforms.append(
-            torchrl.envs.ExcludeTransform(("next", "pixels"), inverse=True)
+            torchrl.envs.ExcludeTransform(("next", "observation"), inverse=True)
         )
 
     forward_transforms = [
         # Forward
         torchrl.envs.ToTensorImage(in_keys=pixels_keys, shape_tolerant=True),
-        # TODO: Already apply this for .inv(...)
         torchrl.envs.DTypeCastTransform(
             dtype_in=torch.bool,
             dtype_out=torch.float,
             in_keys=[collector_out_key],
         ),
-        # TODO: Already apply this for .inv(...)
         torchrl.envs.UnaryTransform(
             in_keys=[collector_out_key],
             out_keys=["target_action"],
             fn=lambda td: td.roll(shifts=-1, dims=-2),
         ),
     ]
-
-    # TODO: This Rename is awkward
-    if exclude_next_observation:
-        forward_transforms.append(
-            torchrl.envs.RenameTransform(
-                in_keys=["pixels"],
-                out_keys=["observation"],
-            ),
-        )
-    else:
-        forward_transforms.append(
-            torchrl.envs.RenameTransform(
-                in_keys=[
-                    "pixels",
-                    ("next", "pixels"),
-                ],
-                out_keys=[
-                    "observation",
-                    ("next", "observation"),
-                ],
-            )
-        )
 
     return (
         Compose(*inverse_transforms),

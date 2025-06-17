@@ -44,28 +44,34 @@ video_recorder = VideoRecorder(
 
 inference_context = 64
 
-t = Compose(
-    RenameTransform(in_keys=["screen"], out_keys=["pixels"], create_copy=True),
-    ToTensorImage(),
-    UnaryTransform(
-        in_keys=["pixels"],
-        out_keys=["pixels"],
-        fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
-    ),
-    Resize((224, 224), in_keys=["pixels"]),
-    RenameTransform(
-        in_keys=["pixels"],
-        out_keys=["observation"],
-    ),
-    TargetReturn(target),
-    ToTensorImage(in_keys=["screen"], out_keys=["saved_screen"], from_int=False),
-    Resize((224, 224), in_keys=["saved_screen"]),
-    video_recorder,
-    ExcludeTransform("screen", "saved_screen"),
-)
 
-env = GymEnv("sa/ArnoldDefendCenter-v0")
-env = TransformedEnv(env, t)
+def env_transforms():
+    return Compose(
+        RenameTransform(in_keys=["screen"], out_keys=["pixels"], create_copy=True),
+        ToTensorImage(),
+        UnaryTransform(
+            in_keys=["pixels"],
+            out_keys=["pixels"],
+            fn=lambda pixels: rearrange(pixels, "... h w -> ... w h"),
+        ),
+        Resize((224, 224), in_keys=["pixels"]),
+        RenameTransform(
+            in_keys=["pixels"],
+            out_keys=["observation"],
+        ),
+        TargetReturn(target),
+        ToTensorImage(in_keys=["screen"], out_keys=["saved_screen"], from_int=False),
+        Resize((224, 224), in_keys=["saved_screen"]),
+        video_recorder,
+        ExcludeTransform("screen", "saved_screen"),
+    )
+
+
+num_envs = 5
+env = SerialEnv(
+    num_envs,
+    lambda: TransformedEnv(GymEnv("sa/ArnoldDefendCenter-v0"), env_transforms()),
+)
 
 
 def sort_checkpoint_names(file_name: str):
@@ -83,16 +89,12 @@ files = sorted(
 
 @torch.no_grad()
 def eval_mean_reward_model(policy: Callable | None, env: GymEnv):
-    r = []
-    for _ in range(5):
-        td = env.rollout(steps, policy)
-        reward = td[("next", "reward")].cumsum(-2).max()
-        r.append(reward.item())
+    td = env.rollout(steps, policy)
+    rewards = td[("next", "reward")].cumsum(-2).max(dim=-2).tolist()
+    if policy is not None and hasattr(policy, "reset"):
+        policy.reset()
 
-        if policy is not None and hasattr(policy, "reset"):
-            policy.reset()
-
-    return r
+    return rewards
 
 
 mean_rewards = []
@@ -117,7 +119,7 @@ rand_mean_reward = eval_mean_reward_model(None, env)
 arnold_mean_reward = eval_mean_reward_model(
     torch.compile(ArnoldAgent("defend_the_center")),
     SerialEnv(
-        1,
+        num_envs,
         lambda: TransformedEnv(
             GymEnv("sa/ArnoldDefendCenter-v0"), Compose(*arnold_env_make_transforms())
         ),
@@ -141,7 +143,7 @@ def make_graph(
     mean_rewards: list[list[float]] | np.ndarray,
     rand_mean_reward: float,
     arnold_mean_reward: float,
-    checkpoint_step: int = 2000,
+    checkpoint_step: int = 8000,
 ):
     mean_rewards = np.array(mean_rewards)
     x = np.arange(mean_rewards.shape[0]).repeat(mean_rewards.shape[1]).flatten()
@@ -151,14 +153,14 @@ def make_graph(
     x = pd.Series(x, name="Checkpoint")
     y = pd.Series(y, name="Achieved reward")
 
-    ax = sns.lineplot(x=x, y=y, label="Unser Modell")
+    ax = sns.lineplot(x=x, y=y, label="Our model")
     ax.axhline(
         np.mean(rand_mean_reward),
         0.0,
         1.0,
         color="red",
         linestyle="dashed",
-        label="Zufällige Action",
+        label="Random action",
     )
     ax.axhline(
         np.mean(arnold_mean_reward),
@@ -166,7 +168,7 @@ def make_graph(
         1.0,
         color="green",
         linestyle="dashed",
-        label="Datensatz Policy",
+        label="Generating policy",
     )
     ax.legend(loc="upper left")
 

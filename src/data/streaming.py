@@ -9,7 +9,7 @@ from tensordict.nn.probabilistic import InteractionType
 from torchrl.collectors import SyncDataCollector
 from torchrl.data import (
     LazyTensorStorage,
-    SliceSampler,
+    PrioritizedSliceSampler,
     TensorDictReplayBuffer,
 )
 
@@ -25,12 +25,15 @@ class GymnasiumStreamingDataset(
         batch_traj_len: int,
         max_traj_len: int,
         num_trajs: int,
+        alpha: float,
+        beta: float,
         policy: torch.nn.Module | None,
         create_env_fn: Callable | torchrl.envs.EnvCreator,
         reward_key=("next", "reward"),
         compilable: bool = True,
         transform: torchrl.envs.Transform | None = None,
         max_seen_rtg: float | None = None,
+        priority_key: str | None = None,
     ):
         assert max_traj_len >= batch_traj_len
 
@@ -56,29 +59,25 @@ class GymnasiumStreamingDataset(
             compilable=self.compilable,
         )
 
-        # sampler = SliceSamplerWithoutReplacement(
-        #     # end_key=("next", "done"),
-        #     traj_key=("collector", "traj_ids"),
-        #     truncated_key=None,
-        #     slice_len=batch_traj_len,
-        #     strict_length=False,
-        #     compile=True,
-        #     use_gpu=True,
-        # )
-        # TODO: SliceSamplerWithoutReplacement seems to not work correctly
+        compile_kwargs = (
+            dict(fullgraph=True, mode="reduce-overhead") if self.compilable else False
+        )
+
+        # SliceSamplerWithoutReplacement seems to not work correctly
         # It only samples a slice once from a trajectory, instead of multiple
         # non-equal slices from the same trajectory.
-        sampler = SliceSampler(
+        sampler = PrioritizedSliceSampler(
+            max_capacity=storage_size,
+            alpha=alpha,
+            beta=beta,
             end_key=("next", "done"),
             slice_len=batch_traj_len,
             # strict_length=False,
             cache_values=True,
-            compile=dict(fullgraph=True, mode="reduce-overhead")
-            if self.compilable
-            else False,
+            compile=compile_kwargs,
             use_gpu=self.compilable,
         )
-
+        
         batch_size_transitions = batch_size * batch_traj_len
 
         super().__init__(
@@ -88,6 +87,7 @@ class GymnasiumStreamingDataset(
             transform=transform,
             shared=True,
             compilable=True,
+            priority_key=priority_key or self.reward_key,
         )
 
     def __iter__(self) -> Iterator[TensorDict]:

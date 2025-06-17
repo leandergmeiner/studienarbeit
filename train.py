@@ -1,6 +1,7 @@
 # %%
 from pathlib import Path
 
+import fire
 import torch
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint, StochasticWeightAveraging
@@ -14,11 +15,7 @@ torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
 
 
-# TODO: Maybe use DeiTImageProcesseor
-def main():
-    model_type = "transformer"
-    inference_context = 64
-
+def main(model_type="transformer", inference_context=64):
     if model_type == "transformer":
         accumulate_grad_batches = 32
         max_batch_size_in_mem = 2
@@ -62,27 +59,33 @@ def main():
         accumulate_grad_batches=accumulate_grad_batches,
     )
 
+    # Offline training
+    print("Offline Training")
     datamodule = DoomStreamingDataModule(
         policy=model,
         batch_size=max_batch_size_in_mem,
         batch_traj_len=inference_context,
         num_workers=3,
-        num_trajs=2,
     )
-
-    # Offline training
-    print("Offline Training")
+    
     datamodule.set_mode("offline", None)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
     # Online training
     print("Online Training")
+    datamodule = DoomStreamingDataModule(
+        policy=model,
+        batch_size=max_batch_size_in_mem,
+        batch_traj_len=inference_context,
+        max_seen_rtgs=datamodule.max_seen_rtgs,
+        num_workers=0, # TODO: The need of setting this to 0 is whack
+    )
+
+    # Update the number of max epochs to include the online training
     trainer.fit_loop.max_epochs = 2 * trainer.fit_loop.max_epochs
     datamodule.set_mode("online", model)
     trainer.fit(model, datamodule=datamodule, ckpt_path="last")
 
 
 if __name__ == "__main__":
-    main()
-
-# %%
+    fire.Fire(main)
