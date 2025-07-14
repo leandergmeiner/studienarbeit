@@ -29,12 +29,16 @@ if __name__ == '__main__':
         model = PPO("CnnPolicy",
             envs,
             n_steps=2048,
+            learning_rate=1e-4,
             ent_coef=0.01,
+            clip_range=0.2,
+            gamma=0.99,
+            gae_lambda=0.95,
             verbose=1,
             tensorboard_log="./ppo_vizdoom_tensorboard/",
             device="cuda")
     
-    timesteps= 500000
+    timesteps= 1000000
     model.learn(timesteps,tb_log_name=f"PPO")
     model.save(f"{model_path}")
     envs.close()

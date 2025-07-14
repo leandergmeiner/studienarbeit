@@ -15,7 +15,11 @@ def create_vizdoom_env():
             self.game = game
             self.game.init()
             self.step_count = 0
-            self.action_space = gymnasium.spaces.MultiBinary(len(self.game.get_available_buttons()))
+            self.available_actions = [
+            [0, 0],  # no action
+            [1, 0],  # move left
+            [0, 1]]  # move right
+            self.action_space = gymnasium.spaces.Discrete(len(self.available_actions))
             self.observation_space = gymnasium.spaces.Box(
                 low=0,
                 high=255,
@@ -25,13 +29,11 @@ def create_vizdoom_env():
             # For repeated-action penalty
             self.last_action = None
             self.repeat_count = 0
-            self.repeat_threshold = 3  # number of repeats allowed without penalty
-            self.repeat_penalty = 2 # penalty per extra repeat
+            self.repeat_threshold = 5  # number of repeats allowed without penalty
+            self.repeat_penalty = 0.5 # penalty per extra repeat
             
             self.kill_State = 0
             self.health = 100
-            self.damage_taken = 0
-            self.HITCOUNT = 0
             self.episode_count = 0
             self.writer = SummaryWriter(f"custom_metrics/env_{self.episode_count}")
         
@@ -43,25 +45,26 @@ def create_vizdoom_env():
             self.step_count = 0
             self.last_action = None
             self.repeat_count = 0
+            self.writer = SummaryWriter(f"custom_metrics/env_{self.episode_count}")
             state = self.game.get_state()
             return self._process_observation(state), {}
         
         def step(self, action):
             self.step_count += 1
             done = self.game.is_episode_finished()
-            action_list = action.astype(int).tolist()
+            action_list = self.available_actions[action]
             reward = self.game.make_action(action_list)
 
             # Repeated action penalty
-            if self.last_action is not None and np.array_equal(action, self.last_action):
-                self.repeat_count += 1
-            else:
-                self.repeat_count = 0
-            if self.repeat_count > self.repeat_threshold:
-                penalty_amount = self.repeat_penalty * (self.repeat_count - self.repeat_threshold)
-                reward -= penalty_amount
-                self.writer.add_scalar("Game/RepeatActionPenalty", -penalty_amount, self.step_count)
-            self.last_action = action.copy()
+            #if self.last_action is not None and np.array_equal(action, self.last_action):
+                #self.repeat_count += 1
+            #else:
+                #self.repeat_count = 0
+            #if self.repeat_count > self.repeat_threshold:
+                #penalty_amount = self.repeat_penalty * (self.repeat_count - self.repeat_threshold)
+                #reward -= penalty_amount
+                #self.writer.add_scalar("Game/RepeatActionPenalty", -penalty_amount, self.step_count)
+            #self.last_action = action.copy()
 
             if self.game.get_state() is not None:
                 state = self.game.get_state()
@@ -69,7 +72,7 @@ def create_vizdoom_env():
                 health, position_y, position_x = game_variables
                 health_delta = health - self.health
                 if health_delta < 0:
-                    reward -= 2
+                    reward -= 0.5
                     self.writer.add_scalar("Game/HealthDelta", health_delta, self.step_count)
                 self.health = health
                 self.writer.add_scalar("Game/Health", health, self.step_count)
@@ -78,20 +81,11 @@ def create_vizdoom_env():
                 if self.best_vision(position_y):
                     reward+= 1                
                 else:
-                    reward -= 0.5
+                    reward -= 2
                 self.writer.add_scalar("Game/Position", position_y, self.step_count)
 
             if done:
-                self.prev_health = 100
-                self.game.new_episode()
-                self.kill_State = 0
-                self.health = 100
-                #self.episode_count += 1
                 self.writer.close()
-                self.writer = SummaryWriter(f"custom_metrics/env_{self.episode_count}")
-                # Reset repetition tracking
-                self.last_action = None
-                self.repeat_count = 0
                 return (np.zeros(self.observation_space.shape, dtype=np.uint8), reward, done, False, {})
 
             state = self.game.get_state()

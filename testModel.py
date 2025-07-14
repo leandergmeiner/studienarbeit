@@ -12,7 +12,7 @@ def make_env(map_name=None):
     return lambda: create_vizdoom_env()
 
 if __name__ == '__main__':
-    model_path = "ppo_vizdoom_model.zip"
+    model_path = "archive/tc_lvl5_1.zip"
     envs = make_vec_env(lambda: create_vizdoom_env(), n_envs=1)
     model = PPO.load(model_path, env=envs, verbose=1)
 
