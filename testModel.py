@@ -1,3 +1,4 @@
+#Used to run test on a specific model, gather the custom metrics and record the frames, meaning the game. To analyze what the agent actually did. 
 import gymnasium
 import cv2
 import numpy as np
@@ -12,13 +13,12 @@ def make_env(map_name=None):
     return lambda: create_vizdoom_env()
 
 if __name__ == '__main__':
-    model_path = "ppo_vizdoom_model.zip"
+    model_path = "archive/dtl_lvl5_1.zip"
     envs = make_vec_env(lambda: create_vizdoom_env(), n_envs=1)
     model = PPO.load(model_path, env=envs, verbose=1)
 
     obs = envs.reset()
 
-    # Get initial grayscale frame and convert to BGR for video
     frame = envs.envs[0].render()
     frame_shape = (frame.shape[1], frame.shape[0])  # (width, height)
 
@@ -32,7 +32,6 @@ if __name__ == '__main__':
 
         frame = envs.envs[0].render()
 
-        # Convert grayscale to BGR so OpenCV can write it
         out.write(frame)
 
         if dones.any():

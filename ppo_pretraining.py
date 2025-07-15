@@ -23,7 +23,7 @@ if __name__ == '__main__':
     print(os.path.exists(model_path))
 
     if os.path.exists(model_path):
-        model = PPO.load(model_path, envs, verbose=1,tensorboard_log="./ppo_vizdoom_tensorboard/", device="cuda")
+        model = PPO.load(model_path, envs, verbose=1,tensorboard_log="./ppo_vizdoom_tensorboard/", device="cuda", ent_coef=0.1)
         model.set_env(env=envs)
     else:
         model = PPO("CnnPolicy",
@@ -38,7 +38,7 @@ if __name__ == '__main__':
             tensorboard_log="./ppo_vizdoom_tensorboard/",
             device="cuda")
     
-    timesteps= 500000
+    timesteps= 1000000
     model.learn(timesteps,tb_log_name=f"PPO")
     model.save(f"{model_path}")
     envs.close()
