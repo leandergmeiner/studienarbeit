@@ -1,3 +1,4 @@
+# Used to generate test runs, gather custom_metrics and analyze in a video what the agent is actually doing 
 import gymnasium
 import cv2
 import numpy as np
